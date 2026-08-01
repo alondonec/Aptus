@@ -76,6 +76,28 @@ if (!existingColumns.has('source')) {
 if (!existingColumns.has('fechaNacimiento')) {
   db.exec('ALTER TABLE patients ADD COLUMN fechaNacimiento TEXT;');
 }
+// Estado del paciente sincronizado desde las Matrices Pre-Screening en
+// Google Sheets (ver POST /api/sync/patient-status): una clasificación final
+// no vacía excluye al paciente de toda evaluación de elegibilidad futura en
+// Aptus (paciente fallecido, ya vinculado a otro protocolo, etc.).
+if (!existingColumns.has('estadoClasificacion')) {
+  db.exec('ALTER TABLE patients ADD COLUMN estadoClasificacion TEXT;');
+}
+if (!existingColumns.has('estadoProtocoloNombre')) {
+  db.exec('ALTER TABLE patients ADD COLUMN estadoProtocoloNombre TEXT;');
+}
+if (!existingColumns.has('aptoOtroProtocolo')) {
+  db.exec('ALTER TABLE patients ADD COLUMN aptoOtroProtocolo INTEGER;');
+}
+if (!existingColumns.has('estadoComentario')) {
+  db.exec('ALTER TABLE patients ADD COLUMN estadoComentario TEXT;');
+}
+if (!existingColumns.has('estadoActualizadoEn')) {
+  db.exec('ALTER TABLE patients ADD COLUMN estadoActualizadoEn TEXT;');
+}
+if (!existingColumns.has('estadoHistorial')) {
+  db.exec("ALTER TABLE patients ADD COLUMN estadoHistorial TEXT NOT NULL DEFAULT '[]';");
+}
 
 // ---- Conversión entre el modelo JS (booleanos true/false/null) y las
 // columnas SQLite (que no tienen tipo boolean nativo, solo INTEGER 0/1/NULL).
@@ -116,6 +138,12 @@ function rowToPatient(row) {
     diagnostics: row.diagnostics,
     fechaIngreso: row.fechaIngreso,
     source: row.source,
+    estadoClasificacion: row.estadoClasificacion,
+    estadoProtocoloNombre: row.estadoProtocoloNombre,
+    aptoOtroProtocolo: fromDbBool(row.aptoOtroProtocolo),
+    estadoComentario: row.estadoComentario,
+    estadoActualizadoEn: row.estadoActualizadoEn,
+    estadoHistorial: JSON.parse(row.estadoHistorial || '[]'),
   };
 }
 
@@ -149,6 +177,17 @@ const stmts = {
   deletePatient: db.prepare('DELETE FROM patients WHERE id = ?'),
   deleteAllPatients: db.prepare('DELETE FROM patients'),
   countPatients: db.prepare('SELECT COUNT(*) AS n FROM patients'),
+  // Estado sincronizado desde Sheets: statement separado y deliberadamente
+  // NO incluido en updatePatient/insertPatient de arriba, para que editar un
+  // paciente por cualquier otra vía (fusión de historias, BD Externa, etc.)
+  // nunca pueda borrar sin querer su clasificación/exclusión ya sincronizada.
+  updatePatientStatus: db.prepare(`
+    UPDATE patients SET estadoClasificacion=@estadoClasificacion,
+      estadoProtocoloNombre=@estadoProtocoloNombre, aptoOtroProtocolo=@aptoOtroProtocolo,
+      estadoComentario=@estadoComentario, estadoActualizadoEn=@estadoActualizadoEn,
+      estadoHistorial=@estadoHistorial
+    WHERE id=@id
+  `),
 
   allProtocols: db.prepare('SELECT * FROM protocols ORDER BY rowid ASC'),
   getProtocol: db.prepare('SELECT * FROM protocols WHERE id = ?'),
@@ -251,6 +290,51 @@ function replaceAllPatients(patients) {
     throw err;
   }
   return getAllPatients();
+}
+
+// Aplica actualizaciones de estado (Clasificación Final, etc.) provenientes
+// de la sincronización con las Matrices Pre-Screening en Google Sheets. Solo
+// actualiza pacientes que ya existen en Base Maestra (por identificación) —
+// nunca crea pacientes nuevos desde acá. Cada llamada agrega una entrada al
+// historial en vez de reemplazarlo, para conservar el rastro completo aunque
+// el estado actual cambie después (ej. el paciente vuelve a estar disponible).
+function applyPatientStatusSync(updates) {
+  const updated = [];
+  const notFound = [];
+  for (const u of updates) {
+    const patient = findPatientByIdentification(u.identification);
+    if (!patient) {
+      notFound.push(u.identification);
+      continue;
+    }
+
+    const comentarioParts = [];
+    if (u.comentarioMedico) comentarioParts.push(`Médico: ${u.comentarioMedico}`);
+    if (u.comentarioPostContacto) comentarioParts.push(`Post-contacto: ${u.comentarioPostContacto}`);
+    if (u.motivoNoAleatorizacion) comentarioParts.push(`Motivo no aleatorización: ${u.motivoNoAleatorizacion}`);
+    const estadoComentario = comentarioParts.length ? comentarioParts.join(' | ') : null;
+
+    const historial = Array.isArray(patient.estadoHistorial) ? patient.estadoHistorial : [];
+    historial.push({
+      fecha: u.fecha || new Date().toISOString(),
+      protocoloNombre: u.protocoloNombre ?? null,
+      clasificacion: u.clasificacion || null,
+      aptoOtroProtocolo: u.aptoOtroProtocolo ?? null,
+      comentario: estadoComentario,
+    });
+
+    stmts.updatePatientStatus.run({
+      id: patient.id,
+      estadoClasificacion: u.clasificacion || null,
+      estadoProtocoloNombre: u.protocoloNombre ?? null,
+      aptoOtroProtocolo: toDbBool(u.aptoOtroProtocolo),
+      estadoComentario,
+      estadoActualizadoEn: new Date().toISOString(),
+      estadoHistorial: JSON.stringify(historial),
+    });
+    updated.push(patient.id);
+  }
+  return { updated, notFound };
 }
 
 // ---- Protocolos
@@ -399,6 +483,7 @@ module.exports = {
   deletePatient,
   deleteAllPatients,
   replaceAllPatients,
+  applyPatientStatusSync,
   getAllProtocols,
   insertProtocol,
   updateProtocol,

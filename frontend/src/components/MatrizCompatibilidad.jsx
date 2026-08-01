@@ -18,8 +18,18 @@ const DATA_SOURCES = [
   { key: 'externa', label: 'BD Externa' },
 ];
 
-function AptoBadge({ apto }) {
-  return apto ? (
+function AptoBadge({ result }) {
+  if (result.excluded) {
+    return (
+      <span
+        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-slate-200 text-slate-600 text-xs font-semibold"
+        title={result.exclusionReason}
+      >
+        🚫 EXCLUIDO
+      </span>
+    );
+  }
+  return result.apto ? (
     <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-green-100 text-green-700 text-xs font-semibold">
       ✅ APTO
     </span>
@@ -239,7 +249,7 @@ export default function MatrizCompatibilidad({
             row.Fuente = getFuenteLabel(patient);
             for (const protocol of visibleProtocols) {
               const result = matrix[patient.id][protocol.id];
-              row[protocol.name] = result.apto ? 'APTO' : 'NO APTO';
+              row[protocol.name] = result.excluded ? 'EXCLUIDO' : result.apto ? 'APTO' : 'NO APTO';
               row[`${protocol.name} - Motivos`] = result.reasons.join(' | ');
             }
             return row;
@@ -260,7 +270,7 @@ export default function MatrizCompatibilidad({
             ...patientToExportRow(patient),
             Fuente: getFuenteLabel(patient),
             Protocolo: protocol.name,
-            Resultado: result.apto ? 'APTO' : 'NO APTO',
+            Resultado: result.excluded ? 'EXCLUIDO' : result.apto ? 'APTO' : 'NO APTO',
             Motivos: result.reasons.join(' | '),
           };
         });
@@ -428,7 +438,7 @@ export default function MatrizCompatibilidad({
                       </td>
                       {visibleProtocols.map((protocol) => (
                         <td key={protocol.id} className="px-3 py-3 text-center">
-                          <AptoBadge apto={matrix[patient.id][protocol.id].apto} />
+                          <AptoBadge result={matrix[patient.id][protocol.id]} />
                         </td>
                       ))}
                     </tr>
@@ -447,9 +457,15 @@ export default function MatrizCompatibilidad({
                                     <p className="text-xs font-semibold text-slate-700">
                                       {protocol.name}
                                     </p>
-                                    <AptoBadge apto={result.apto} />
+                                    <AptoBadge result={result} />
                                   </div>
                                   <div className="space-y-2">
+                                    {result.excluded && (
+                                      <p className="text-xs text-slate-500">
+                                        Excluido de forma general en Aptus: <strong>{result.exclusionReason}</strong>
+                                        {result.exclusionProtocolo && ` (${result.exclusionProtocolo})`}
+                                      </p>
+                                    )}
                                     {result.inclusionResults.length > 0 && (
                                       <div>
                                         <p className="text-[10px] uppercase tracking-wide text-slate-400 mb-1">

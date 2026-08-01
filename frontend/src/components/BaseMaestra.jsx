@@ -52,6 +52,28 @@ function SourceBadge({ source }) {
   );
 }
 
+// Solo lectura: este dato entra únicamente por la sincronización con las
+// Matrices Pre-Screening en Google Sheets (POST /api/sync/patient-status),
+// nunca se edita desde la UI de Aptus, para que quede protegido igual que en
+// la hoja de Sheets.
+function EstadoBadge({ patient }) {
+  if (!patient.estadoClasificacion) return <span className="text-slate-300">—</span>;
+  const title = [
+    patient.estadoComentario,
+    patient.estadoActualizadoEn && `Actualizado: ${new Date(patient.estadoActualizadoEn).toLocaleString()}`,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+  return (
+    <span
+      className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium whitespace-nowrap bg-amber-50 text-amber-700"
+      title={title || undefined}
+    >
+      🚫 {patient.estadoClasificacion}
+    </span>
+  );
+}
+
 export default function BaseMaestra({ patients, protocols, onDeletePatient, onDeleteAllPatients, onRestoreBackup }) {
   const [query, setQuery] = useState('');
   const [showFilters, setShowFilters] = useState(false);
@@ -350,6 +372,7 @@ export default function BaseMaestra({ patients, protocols, onDeletePatient, onDe
                 <th className="text-center px-3 py-3 font-medium">FEVI</th>
                 <th className="text-left px-4 py-3 font-medium">Diagnósticos</th>
                 <th className="text-left px-4 py-3 font-medium">Origen</th>
+                <th className="text-left px-4 py-3 font-medium">Estado</th>
                 <th className="px-3 py-3"></th>
               </tr>
             </thead>
@@ -374,6 +397,7 @@ export default function BaseMaestra({ patients, protocols, onDeletePatient, onDe
                     <TruncatedCell text={p.diagnostics} />
                   </td>
                   <td className="px-4 py-3"><SourceBadge source={p.source} /></td>
+                  <td className="px-4 py-3"><EstadoBadge patient={p} /></td>
                   <td className="px-3 py-3 text-center">
                     <button
                       onClick={() => onDeletePatient(p.id)}
@@ -387,7 +411,7 @@ export default function BaseMaestra({ patients, protocols, onDeletePatient, onDe
               ))}
               {filtered.length === 0 && (
                 <tr>
-                  <td colSpan={15} className="px-4 py-10 text-center text-slate-400">
+                  <td colSpan={16} className="px-4 py-10 text-center text-slate-400">
                     No se encontraron pacientes con ese criterio de búsqueda.
                   </td>
                 </tr>

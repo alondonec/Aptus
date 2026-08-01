@@ -30,5 +30,12 @@ export function patientToExportRow(p) {
     Diagnosticos: p.diagnostics,
     FechaIngreso: p.fechaIngreso,
     Origen: SOURCE_LABELS[p.source] ?? '',
+    Estado: p.estadoClasificacion ?? '',
+    'Comentario Estado': p.estadoComentario ?? '',
+    'Apto para Otro Protocolo': p.aptoOtroProtocolo === null || p.aptoOtroProtocolo === undefined
+      ? ''
+      : p.aptoOtroProtocolo
+        ? 'Sí'
+        : 'No',
   };
 }

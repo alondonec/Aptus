@@ -1,6 +1,22 @@
 import { resolvePatientFlags, detectKeywordPresence } from './nlpEngine';
 
 /**
+ * Un paciente con Clasificación Final no vacía (sincronizada desde la Matriz
+ * Pre-Screening en Google Sheets — ver POST /api/sync/patient-status) queda
+ * excluido de toda evaluación de elegibilidad futura en Aptus, sin importar
+ * el protocolo: ya sea porque falleció, ya está vinculado a otro protocolo,
+ * o fue excluido por criterio médico/social. Esto se evalúa antes de
+ * cualquier criterio de inclusión/exclusión propio del protocolo.
+ */
+export function getGlobalExclusion(patient) {
+  if (!patient?.estadoClasificacion) return null;
+  return {
+    reason: patient.estadoClasificacion,
+    protocolo: patient.estadoProtocoloNombre ?? null,
+  };
+}
+
+/**
  * Evalúa un único criterio (inclusión o exclusión) contra un paciente
  * ya resuelto (con flags NLP aplicados). Los criterios personalizados
  * (field === 'custom') se evalúan buscando sus palabras clave en el texto
@@ -84,6 +100,20 @@ export function evaluateCriterion(patient, criterion) {
  * motor NLP de negaciones para completar campos faltantes.
  */
 export function evaluatePatientForProtocol(patient, protocol) {
+  const globalExclusion = getGlobalExclusion(patient);
+  if (globalExclusion) {
+    return {
+      apto: false,
+      excluded: true,
+      exclusionReason: globalExclusion.reason,
+      exclusionProtocolo: globalExclusion.protocolo,
+      inclusionResults: [],
+      exclusionResults: [],
+      reasons: [`Excluido: ${globalExclusion.reason}`],
+      resolvedPatient: patient,
+    };
+  }
+
   const resolved = resolvePatientFlags(patient);
 
   const inclusionResults = protocol.inclusionCriteria.map((c) => ({

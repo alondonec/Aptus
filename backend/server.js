@@ -23,6 +23,7 @@ process.on('uncaughtException', (err) => {
 const app = express();
 const PORT = process.env.PORT || 3001;
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+const SHEETS_SYNC_API_KEY = process.env.SHEETS_SYNC_API_KEY;
 const ANTHROPIC_VERSION = '2023-06-01';
 const FILES_API_BETA = 'files-api-2025-04-14';
 const MODEL = 'claude-sonnet-4-6';
@@ -500,6 +501,16 @@ app.post('/api/ask', async (req, res) => {
   }
 });
 
+// Requiere una API key para el endpoint de sincronización desde Google
+// Sheets (Apps Script llama desde fuera del navegador, no puede depender de
+// CORS como control de acceso). El resto de la API queda como está.
+function requireSyncApiKey(req, res, next) {
+  if (!SHEETS_SYNC_API_KEY || req.get('x-api-key') !== SHEETS_SYNC_API_KEY) {
+    return res.status(401).json({ success: false, error: 'API key inválida o no configurada' });
+  }
+  next();
+}
+
 // ---- Pacientes (persistidos en SQLite) ----
 
 app.get('/api/patients', (req, res) => {
@@ -569,6 +580,25 @@ app.delete('/api/patients', (req, res) => {
     res.json({ success: true, deletedCount });
   } catch (err) {
     console.error('Error en DELETE /api/patients:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// Sincronización de estado del paciente desde las Matrices Pre-Screening en
+// Google Sheets (Apps Script). Una Clasificación Final no vacía excluye al
+// paciente de toda evaluación de elegibilidad futura en Aptus — ver
+// getGlobalExclusion en frontend/src/utils/matchEngine.js. Solo actualiza
+// pacientes que ya existen en Base Maestra, nunca crea pacientes nuevos.
+app.post('/api/sync/patient-status', requireSyncApiKey, (req, res) => {
+  try {
+    const updates = req.body?.updates;
+    if (!Array.isArray(updates)) {
+      return res.status(400).json({ success: false, error: 'Se esperaba un arreglo "updates"' });
+    }
+    const result = db.applyPatientStatusSync(updates);
+    res.json({ success: true, ...result });
+  } catch (err) {
+    console.error('Error en POST /api/sync/patient-status:', err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 });
