@@ -4,7 +4,7 @@ const crypto = require('crypto');
 const { DatabaseSync } = require('node:sqlite');
 const { initialPatients, initialProtocols } = require('./seedData');
 
-const DATA_DIR = path.join(__dirname, 'data');
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 fs.mkdirSync(DATA_DIR, { recursive: true });
 
 const db = new DatabaseSync(path.join(DATA_DIR, 'aptus.db'));

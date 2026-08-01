@@ -3,7 +3,7 @@
 // datos del servidor y sobreviven tanto a un refresco de página como a
 // reinicios del backend o cambios de navegador/dispositivo.
 
-export const API_BASE = 'http://localhost:3002';
+export const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:3002';
 
 async function request(path, options) {
   let response;

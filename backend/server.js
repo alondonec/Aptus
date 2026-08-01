@@ -34,13 +34,18 @@ const MAX_SPLIT_DEPTH = 3; // hasta 2^3 = 8 partes
 const INPUT_PRICE_PER_TOKEN = 3 / 1_000_000;
 const OUTPUT_PRICE_PER_TOKEN = 15 / 1_000_000;
 
-// Acepta cualquier puerto de localhost: el servidor de desarrollo de Vite
-// (autoPort) puede terminar en un puerto distinto a 5173 si ese puerto ya
-// está ocupado por otra sesión, así que no lo fijamos a uno solo.
+// Acepta cualquier puerto de localhost (para desarrollo, ya que el puerto de
+// Vite puede variar) más el/los orígenes de producción indicados en
+// FRONTEND_URL (uno o varios, separados por coma; ej. el dominio de Vercel).
+const allowedProdOrigins = (process.env.FRONTEND_URL || '')
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean);
+
 app.use(
   cors({
     origin: (origin, callback) => {
-      if (!origin || /^http:\/\/localhost:\d+$/.test(origin)) {
+      if (!origin || /^http:\/\/localhost:\d+$/.test(origin) || allowedProdOrigins.includes(origin)) {
         callback(null, true);
       } else {
         callback(new Error('Origen no permitido por CORS'));
