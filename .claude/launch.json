@@ -1,0 +1,24 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "backend",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-c",
+        "cd /Users/Alejo/Desktop/Aptus/backend && export PORT=3002 && until /Users/Alejo/.local/node/bin/node server.js; do echo 'Backend se detuvo inesperadamente, reiniciando en 1s...'; sleep 1; done"
+      ],
+      "port": 3002
+    },
+    {
+      "name": "frontend",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": [
+        "-c",
+        "cd /Users/Alejo/Desktop/Aptus/frontend && PATH=/Users/Alejo/.local/node/bin:$PATH /Users/Alejo/.local/node/bin/npm run dev -- --host --port 5174 --strictPort"
+      ],
+      "port": 5174,
+      "autoPort": false
+    }
+  ]
+}

@@ -1,0 +1,186 @@
+// Datos de ejemplo para poblar la base de datos SQLite en el primer arranque
+// (espejo de frontend/src/data/mockData.js). Solo se insertan si las tablas
+// están vacías, así que no pisan datos reales una vez que el usuario empieza
+// a trabajar.
+
+const initialPatients = [
+  {
+    id: 'p1',
+    name: 'María Fernanda Gómez Ríos',
+    identification: 'CC 43.128.905',
+    edad: 58,
+    phone: '300 512 8890',
+    address: 'Cra 45 #12-34, Medellín',
+    imc: 31.4,
+    hta: true,
+    dm2: true,
+    erc: false,
+    icc: false,
+    fa: null,
+    uacr: 18,
+    fevi: 62,
+    eventoCV: false,
+    dementia: false,
+    diagnostics:
+      'Paciente con hipertensión arterial de larga data y diabetes mellitus tipo 2 en tratamiento con metformina. Niega fibrilación auricular. Sin antecedentes de insuficiencia cardíaca.',
+    fechaIngreso: '2026-01-12',
+    source: 'demo',
+  },
+  {
+    id: 'p2',
+    name: 'Carlos Andrés Martínez Ocampo',
+    identification: 'CC 71.345.220',
+    edad: 64,
+    phone: '312 884 0021',
+    address: 'Calle 10 #8-21, Bogotá',
+    imc: 27.8,
+    hta: true,
+    dm2: false,
+    erc: true,
+    icc: false,
+    fa: false,
+    uacr: 145,
+    fevi: 55,
+    eventoCV: true,
+    dementia: false,
+    diagnostics:
+      'Antecedente de infarto agudo de miocardio hace 3 años. Hipertenso controlado. Enfermedad renal crónica estadio 3. Niega diabetes.',
+    fechaIngreso: '2026-02-03',
+    source: 'demo',
+  },
+  {
+    id: 'p3',
+    name: 'Luisa Fernanda Toro Vélez',
+    identification: 'CC 52.998.117',
+    edad: 47,
+    phone: '318 220 9944',
+    address: 'Av. Circunvalar #22-10, Cali',
+    imc: 24.1,
+    hta: null,
+    dm2: null,
+    erc: false,
+    icc: true,
+    fa: true,
+    uacr: 22,
+    fevi: 33,
+    eventoCV: false,
+    dementia: false,
+    diagnostics:
+      'Insuficiencia cardíaca con fracción de eyección reducida. Fibrilación auricular permanente. No presenta antecedentes de hipertensión arterial. Niega diabetes mellitus.',
+    fechaIngreso: '2026-02-19',
+    source: 'demo',
+  },
+  {
+    id: 'p4',
+    name: 'Jorge Eliécer Ramírez Soto',
+    identification: 'CC 19.442.876',
+    edad: 55,
+    phone: '305 667 1123',
+    address: 'Cra 7 #45-89, Bucaramanga',
+    imc: 36.9,
+    hta: true,
+    dm2: true,
+    erc: false,
+    icc: false,
+    fa: false,
+    uacr: 12,
+    fevi: 60,
+    eventoCV: false,
+    dementia: null,
+    diagnostics:
+      'Obesidad grado II, hipertensión arterial y diabetes tipo 2 de difícil control. Deterioro cognitivo leve en evaluación por neurología.',
+    fechaIngreso: '2026-03-05',
+    source: 'demo',
+  },
+  {
+    id: 'p5',
+    name: 'Ana Milena Castaño Higuita',
+    identification: 'CC 63.771.542',
+    edad: 39,
+    phone: '301 998 4432',
+    address: 'Calle 33 #14-56, Pereira',
+    imc: 22.5,
+    hta: false,
+    dm2: false,
+    erc: false,
+    icc: false,
+    fa: false,
+    uacr: 8,
+    fevi: 65,
+    eventoCV: false,
+    dementia: false,
+    diagnostics:
+      'Paciente sana, sin comorbilidades cardiovasculares ni metabólicas. Chequeo preventivo anual.',
+    fechaIngreso: '2026-03-21',
+    source: 'demo',
+  },
+  {
+    id: 'p6',
+    name: 'Pedro Pablo Vanegas Zuluaga',
+    identification: 'CC 80.556.311',
+    edad: 71,
+    phone: '320 447 6690',
+    address: 'Cra 30 #5-12, Barranquilla',
+    imc: 29.7,
+    hta: true,
+    dm2: null,
+    erc: true,
+    icc: true,
+    fa: null,
+    uacr: 210,
+    fevi: 28,
+    eventoCV: true,
+    dementia: false,
+    diagnostics:
+      'Insuficiencia cardíaca avanzada con fracción de eyección reducida. Enfermedad renal crónica estadio 4. Antecedente de accidente cerebrovascular. Diabetes mellitus tipo 2 diagnosticada hace 5 años.',
+    fechaIngreso: '2026-04-02',
+    source: 'demo',
+  },
+];
+
+const initialProtocols = [
+  {
+    id: 'proto1',
+    name: 'Control Metabólico HTA-DM2',
+    description:
+      'Pacientes con hipertensión y diabetes tipo 2 candidatos a manejo metabólico intensivo.',
+    inclusionCriteria: [
+      { id: 'c1', field: 'hta', operator: 'true', label: 'Hipertensión arterial' },
+      { id: 'c2', field: 'dm2', operator: 'true', label: 'Diabetes tipo 2' },
+      { id: 'c3', field: 'imc', operator: '<', value: 35, label: 'IMC' },
+    ],
+    exclusionCriteria: [
+      { id: 'c4', field: 'erc', operator: 'true', label: 'Enfermedad renal crónica' },
+      { id: 'c5', field: 'dementia', operator: 'true', label: 'Demencia' },
+    ],
+  },
+  {
+    id: 'proto2',
+    name: 'Insuficiencia Cardíaca Avanzada',
+    description:
+      'Pacientes con ICC y FEVI reducida candidatos a terapia dirigida avanzada.',
+    inclusionCriteria: [
+      { id: 'c6', field: 'icc', operator: 'true', label: 'Insuficiencia cardíaca' },
+      { id: 'c7', field: 'fevi', operator: '<', value: 40, label: 'FEVI' },
+    ],
+    exclusionCriteria: [
+      { id: 'c8', field: 'dementia', operator: 'true', label: 'Demencia' },
+      { id: 'c9', field: 'erc', operator: 'true', label: 'Enfermedad renal crónica' },
+    ],
+  },
+  {
+    id: 'proto3',
+    name: 'Prevención Cardiovascular Secundaria - FA',
+    description:
+      'Pacientes con fibrilación auricular y evento cardiovascular previo.',
+    inclusionCriteria: [
+      { id: 'c10', field: 'fa', operator: 'true', label: 'Fibrilación auricular' },
+      { id: 'c11', field: 'eventoCV', operator: 'true', label: 'Evento cardiovascular previo' },
+    ],
+    exclusionCriteria: [
+      { id: 'c12', field: 'erc', operator: 'true', label: 'Enfermedad renal crónica' },
+    ],
+  },
+];
+
+module.exports = { initialPatients, initialProtocols };

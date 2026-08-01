@@ -1,0 +1,31 @@
+# Dependencias
+node_modules/
+
+# Variables de entorno y secretos (API keys)
+.env
+.env.*
+!.env.example
+
+# Base de datos (datos reales de pacientes — nunca debe subirse al repo)
+backend/data/
+
+# Exportaciones sueltas con datos de pacientes reales generadas durante el
+# uso de la app (XLSX, respaldo JSON, CSV) — no son parte del código fuente.
+*.xlsx
+aptus_respaldo*.json
+*.csv
+
+# Build
+frontend/dist/
+frontend/dist-ssr/
+
+# Sistema / editor
+.DS_Store
+*.local
+.vscode/*
+!.vscode/extensions.json
+.idea
+*.log
+
+# Configuración local de Claude Code (permisos/estado local, no es parte del código)
+.claude/settings.local.json
