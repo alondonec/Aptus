@@ -24,18 +24,18 @@ import {
   updateProtocolApi,
   deleteProtocolApi,
   replaceProtocolsApi,
+  fetchHistoriaLotes,
+  replaceHistoriaLotesApi,
+  fetchHistoriaItems,
+  replaceHistoriaItemsApi,
 } from './utils/api';
 import { normalizeExternalPatient } from './utils/normalizeExternalPatient';
 import { findPatientByIdentification } from './utils/patientIdentity';
 import { mergeDuplicatePatients } from './utils/patientMerge';
 import { LEGACY_LOTE_ID } from './utils/loteConstants';
 import {
-  loadHistoriaItems,
-  saveHistoriaItems,
   loadHistoriaSentIds,
   saveHistoriaSentIds,
-  loadHistoriaLotes,
-  saveHistoriaLotes,
   clearHistoriaStorage,
 } from './utils/historiaStorage';
 import Dashboard from './components/Dashboard';
@@ -110,14 +110,14 @@ export default function App() {
   // respalda en localStorage para que sobreviva a un refresco de página —
   // antes se perdía todo al recargar, incluso después de enviarlas a la
   // Base Maestra, lo que impedía cruzarlas en la Matriz de Compatibilidad.
-  const [historiaItems, setHistoriaItems] = useState(loadHistoriaItems);
+  const [historiaItems, setHistoriaItems] = useState([]);
   const [historiaSentIds, setHistoriaSentIds] = useState(loadHistoriaSentIds);
 
   // Bloques de carga: agrupan las historias cargadas juntas (una sesión de
   // carga) con su fecha y fuente, para poder auditar cuántas se cargaron,
   // cuántas ya existían, y cruzar la Matriz de Compatibilidad contra un
   // bloque específico en vez de todas las historias mezcladas.
-  const [historiaLotes, setHistoriaLotes] = useState(loadHistoriaLotes);
+  const [historiaLotes, setHistoriaLotes] = useState([]);
   const [activeLoteId, setActiveLoteId] = useState(null);
 
   // Selecciones del Dashboard y de Matriz de Compatibilidad: se mantienen acá
@@ -138,8 +138,38 @@ export default function App() {
   // perdería cada vez que se cambia de pestaña.
   const [assistantHistory, setAssistantHistory] = useState([]);
 
+  // Bloques de carga (lotes + items): igual que pacientes/protocolos, viven en
+  // el backend para que se vean iguales sin importar desde qué navegador o
+  // entorno (local/producción) se abra la app. El guardado se debounce porque
+  // este efecto dispara en cada actualización de progreso durante una carga,
+  // no solo cuando una historia termina.
+  const dataLoadedRef = useRef(false);
+  const historiaItemsSaveTimeout = useRef(null);
+  const historiaLotesSaveTimeout = useRef(null);
+
   useEffect(() => {
-    saveHistoriaItems(historiaItems);
+    if (!dataLoadedRef.current) return undefined;
+    clearTimeout(historiaItemsSaveTimeout.current);
+    historiaItemsSaveTimeout.current = setTimeout(() => {
+      const persistable = historiaItems
+        .filter((it) => it.status === 'done' || it.status === 'error')
+        .map((it) => ({
+          id: it.id,
+          loteId: it.loteId,
+          fileName: it.fileName,
+          fileSize: it.fileSize,
+          status: it.status,
+          progress: it.progress,
+          patient: it.patient,
+          error: it.error,
+          splitInto: it.splitInto,
+          costUsd: it.costUsd,
+        }));
+      replaceHistoriaItemsApi(persistable).catch((err) => {
+        console.error('No se pudieron guardar las historias clínicas en el servidor:', err.message);
+      });
+    }, 800);
+    return () => clearTimeout(historiaItemsSaveTimeout.current);
   }, [historiaItems]);
 
   useEffect(() => {
@@ -147,7 +177,14 @@ export default function App() {
   }, [historiaSentIds]);
 
   useEffect(() => {
-    saveHistoriaLotes(historiaLotes);
+    if (!dataLoadedRef.current) return undefined;
+    clearTimeout(historiaLotesSaveTimeout.current);
+    historiaLotesSaveTimeout.current = setTimeout(() => {
+      replaceHistoriaLotesApi(historiaLotes).catch((err) => {
+        console.error('No se pudieron guardar los bloques de carga en el servidor:', err.message);
+      });
+    }, 800);
+    return () => clearTimeout(historiaLotesSaveTimeout.current);
   }, [historiaLotes]);
 
   // Versiones "tipo paciente" de Historias Clínicas y BD Externa, para que
@@ -175,13 +212,21 @@ export default function App() {
     setLoading(true);
     setLoadError(null);
     try {
-      const [patientsData, protocolsData] = await Promise.all([fetchPatients(), fetchProtocols()]);
+      const [patientsData, protocolsData, historiaLotesData, historiaItemsData] = await Promise.all([
+        fetchPatients(),
+        fetchProtocols(),
+        fetchHistoriaLotes(),
+        fetchHistoriaItems(),
+      ]);
       setPatients(patientsData);
       setProtocols(protocolsData);
+      setHistoriaLotes(historiaLotesData);
+      setHistoriaItems(historiaItemsData);
     } catch (err) {
       setLoadError(err.message);
     } finally {
       setLoading(false);
+      dataLoadedRef.current = true;
     }
   }
 

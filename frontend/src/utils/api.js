@@ -113,3 +113,25 @@ export async function replaceProtocolsApi(protocols) {
   const data = await request('/api/protocols', { method: 'PUT', body: JSON.stringify({ protocols }) });
   return data.protocols;
 }
+
+// ---- Bloques de carga de Historias Clínicas (lotes + items) ----
+
+export async function fetchHistoriaLotes() {
+  const data = await request('/api/historia-lotes');
+  return data.lotes;
+}
+
+export async function replaceHistoriaLotesApi(lotes) {
+  const data = await request('/api/historia-lotes', { method: 'PUT', body: JSON.stringify({ lotes }) });
+  return data.lotes;
+}
+
+export async function fetchHistoriaItems() {
+  const data = await request('/api/historia-items');
+  return data.items;
+}
+
+export async function replaceHistoriaItemsApi(items) {
+  const data = await request('/api/historia-items', { method: 'PUT', body: JSON.stringify({ items }) });
+  return data.items;
+}

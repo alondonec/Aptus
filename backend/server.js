@@ -638,6 +638,56 @@ app.delete('/api/protocols/:id', (req, res) => {
   }
 });
 
+// ---- Bloques de carga de Historias Clínicas (persistidos en SQLite, antes
+// vivían solo en localStorage del navegador — por eso no se veían al abrir la
+// app desde otro dispositivo/entorno).
+
+app.get('/api/historia-lotes', (req, res) => {
+  try {
+    res.json({ success: true, lotes: db.getAllHistoriaLotes() });
+  } catch (err) {
+    console.error('Error en GET /api/historia-lotes:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.put('/api/historia-lotes', (req, res) => {
+  try {
+    const incoming = req.body?.lotes;
+    if (!Array.isArray(incoming)) {
+      return res.status(400).json({ success: false, error: 'Se esperaba un arreglo "lotes"' });
+    }
+    const lotes = db.replaceAllHistoriaLotes(incoming);
+    res.json({ success: true, lotes });
+  } catch (err) {
+    console.error('Error en PUT /api/historia-lotes:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.get('/api/historia-items', (req, res) => {
+  try {
+    res.json({ success: true, items: db.getAllHistoriaItems() });
+  } catch (err) {
+    console.error('Error en GET /api/historia-items:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+app.put('/api/historia-items', (req, res) => {
+  try {
+    const incoming = req.body?.items;
+    if (!Array.isArray(incoming)) {
+      return res.status(400).json({ success: false, error: 'Se esperaba un arreglo "items"' });
+    }
+    const items = db.replaceAllHistoriaItems(incoming);
+    res.json({ success: true, items });
+  } catch (err) {
+    console.error('Error en PUT /api/historia-items:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', hasApiKey: Boolean(ANTHROPIC_API_KEY) });
 });

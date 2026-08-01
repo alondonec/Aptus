@@ -42,6 +42,25 @@ db.exec(`
     inclusionCriteria TEXT NOT NULL DEFAULT '[]',
     exclusionCriteria TEXT NOT NULL DEFAULT '[]'
   );
+
+  CREATE TABLE IF NOT EXISTS historia_lotes (
+    id TEXT PRIMARY KEY,
+    fuente TEXT,
+    createdAt TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS historia_items (
+    id TEXT PRIMARY KEY,
+    loteId TEXT,
+    fileName TEXT,
+    fileSize INTEGER,
+    status TEXT,
+    progress REAL,
+    patient TEXT,
+    error TEXT,
+    splitInto INTEGER,
+    costUsd REAL
+  );
 `);
 
 // ---- Migración ligera: si la base ya existía de una versión anterior sin
@@ -145,6 +164,19 @@ const stmts = {
   deleteProtocol: db.prepare('DELETE FROM protocols WHERE id = ?'),
   deleteAllProtocols: db.prepare('DELETE FROM protocols'),
   countProtocols: db.prepare('SELECT COUNT(*) AS n FROM protocols'),
+
+  allHistoriaLotes: db.prepare('SELECT * FROM historia_lotes ORDER BY rowid ASC'),
+  insertHistoriaLote: db.prepare(`
+    INSERT INTO historia_lotes (id, fuente, createdAt) VALUES (@id, @fuente, @createdAt)
+  `),
+  deleteAllHistoriaLotes: db.prepare('DELETE FROM historia_lotes'),
+
+  allHistoriaItems: db.prepare('SELECT * FROM historia_items ORDER BY rowid ASC'),
+  insertHistoriaItem: db.prepare(`
+    INSERT INTO historia_items (id, loteId, fileName, fileSize, status, progress, patient, error, splitInto, costUsd)
+    VALUES (@id, @loteId, @fileName, @fileSize, @status, @progress, @patient, @error, @splitInto, @costUsd)
+  `),
+  deleteAllHistoriaItems: db.prepare('DELETE FROM historia_items'),
 };
 
 function getAllPatients() {
@@ -272,6 +304,80 @@ function replaceAllProtocols(protocols) {
   return getAllProtocols();
 }
 
+// ---- Bloques de carga de Historias Clínicas (lotes + items)
+
+function rowToHistoriaLote(row) {
+  return { id: row.id, fuente: row.fuente, createdAt: row.createdAt };
+}
+
+function rowToHistoriaItem(row) {
+  return {
+    id: row.id,
+    loteId: row.loteId,
+    fileName: row.fileName,
+    fileSize: row.fileSize,
+    status: row.status,
+    progress: row.progress,
+    patient: row.patient ? JSON.parse(row.patient) : null,
+    error: row.error,
+    splitInto: row.splitInto,
+    costUsd: row.costUsd,
+  };
+}
+
+function getAllHistoriaLotes() {
+  return stmts.allHistoriaLotes.all().map(rowToHistoriaLote);
+}
+
+function replaceAllHistoriaLotes(lotes) {
+  db.exec('BEGIN');
+  try {
+    stmts.deleteAllHistoriaLotes.run();
+    for (const l of lotes) {
+      stmts.insertHistoriaLote.run({
+        id: l.id,
+        fuente: l.fuente ?? null,
+        createdAt: l.createdAt ?? null,
+      });
+    }
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+  return getAllHistoriaLotes();
+}
+
+function getAllHistoriaItems() {
+  return stmts.allHistoriaItems.all().map(rowToHistoriaItem);
+}
+
+function replaceAllHistoriaItems(items) {
+  db.exec('BEGIN');
+  try {
+    stmts.deleteAllHistoriaItems.run();
+    for (const it of items) {
+      stmts.insertHistoriaItem.run({
+        id: it.id,
+        loteId: it.loteId ?? null,
+        fileName: it.fileName ?? null,
+        fileSize: it.fileSize ?? null,
+        status: it.status ?? null,
+        progress: it.progress ?? null,
+        patient: it.patient ? JSON.stringify(it.patient) : null,
+        error: it.error ?? null,
+        splitInto: it.splitInto ?? null,
+        costUsd: it.costUsd ?? null,
+      });
+    }
+    db.exec('COMMIT');
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+  return getAllHistoriaItems();
+}
+
 // ---- Semilla inicial: solo si las tablas están vacías (primer arranque).
 
 function seedIfEmpty() {
@@ -298,4 +404,8 @@ module.exports = {
   updateProtocol,
   deleteProtocol,
   replaceAllProtocols,
+  getAllHistoriaLotes,
+  replaceAllHistoriaLotes,
+  getAllHistoriaItems,
+  replaceAllHistoriaItems,
 };
