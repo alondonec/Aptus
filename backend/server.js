@@ -39,13 +39,14 @@ const OUTPUT_PRICE_PER_TOKEN = 15 / 1_000_000;
 // FRONTEND_URL (uno o varios, separados por coma; ej. el dominio de Vercel).
 const allowedProdOrigins = (process.env.FRONTEND_URL || '')
   .split(',')
-  .map((o) => o.trim())
+  .map((o) => o.trim().replace(/\/+$/, ''))
   .filter(Boolean);
 
 app.use(
   cors({
     origin: (origin, callback) => {
-      if (!origin || /^http:\/\/localhost:\d+$/.test(origin) || allowedProdOrigins.includes(origin)) {
+      const normalizedOrigin = (origin || '').replace(/\/+$/, '');
+      if (!origin || /^http:\/\/localhost:\d+$/.test(origin) || allowedProdOrigins.includes(normalizedOrigin)) {
         callback(null, true);
       } else {
         callback(new Error('Origen no permitido por CORS'));
