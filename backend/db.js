@@ -98,6 +98,12 @@ if (!existingColumns.has('estadoActualizadoEn')) {
 if (!existingColumns.has('estadoHistorial')) {
   db.exec("ALTER TABLE patients ADD COLUMN estadoHistorial TEXT NOT NULL DEFAULT '[]';");
 }
+// Peso (kg): se extrae de la historia clínica cuando el IMC no viene
+// explícito, para poder calcularlo (ver server.js) o, si tampoco hay talla,
+// aplicar el criterio de respaldo peso > 80kg en matchEngine.js.
+if (!existingColumns.has('peso')) {
+  db.exec('ALTER TABLE patients ADD COLUMN peso REAL;');
+}
 
 // ---- Conversión entre el modelo JS (booleanos true/false/null) y las
 // columnas SQLite (que no tienen tipo boolean nativo, solo INTEGER 0/1/NULL).
@@ -144,6 +150,7 @@ function rowToPatient(row) {
     estadoComentario: row.estadoComentario,
     estadoActualizadoEn: row.estadoActualizadoEn,
     estadoHistorial: JSON.parse(row.estadoHistorial || '[]'),
+    peso: row.peso,
   };
 }
 
@@ -163,15 +170,15 @@ const stmts = {
   allPatients: db.prepare('SELECT * FROM patients ORDER BY rowid ASC'),
   getPatient: db.prepare('SELECT * FROM patients WHERE id = ?'),
   insertPatient: db.prepare(`
-    INSERT INTO patients (id, name, identification, edad, fechaNacimiento, phone, address, imc, hta, dm2, erc, icc, fa, uacr, fevi, eventoCV, dementia, diagnostics, fechaIngreso, source)
-    VALUES (@id, @name, @identification, @edad, @fechaNacimiento, @phone, @address, @imc, @hta, @dm2, @erc, @icc, @fa, @uacr, @fevi, @eventoCV, @dementia, @diagnostics, @fechaIngreso, @source)
+    INSERT INTO patients (id, name, identification, edad, fechaNacimiento, phone, address, imc, hta, dm2, erc, icc, fa, uacr, fevi, eventoCV, dementia, diagnostics, fechaIngreso, source, peso)
+    VALUES (@id, @name, @identification, @edad, @fechaNacimiento, @phone, @address, @imc, @hta, @dm2, @erc, @icc, @fa, @uacr, @fevi, @eventoCV, @dementia, @diagnostics, @fechaIngreso, @source, @peso)
   `),
   updatePatient: db.prepare(`
     UPDATE patients SET name=@name, identification=@identification, edad=@edad,
       fechaNacimiento=@fechaNacimiento, phone=@phone, address=@address, imc=@imc,
       hta=@hta, dm2=@dm2, erc=@erc, icc=@icc, fa=@fa, uacr=@uacr, fevi=@fevi,
       eventoCV=@eventoCV, dementia=@dementia, diagnostics=@diagnostics,
-      fechaIngreso=@fechaIngreso, source=@source
+      fechaIngreso=@fechaIngreso, source=@source, peso=@peso
     WHERE id=@id
   `),
   deletePatient: db.prepare('DELETE FROM patients WHERE id = ?'),
@@ -244,6 +251,7 @@ function patientToParams(id, patient) {
     diagnostics: patient.diagnostics ?? null,
     fechaIngreso: patient.fechaIngreso ?? null,
     source: patient.source ?? null,
+    peso: patient.peso ?? null,
   };
 }
 

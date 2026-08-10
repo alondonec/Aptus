@@ -5,7 +5,7 @@
 
 const MERGE_FIELDS = [
   'name', 'identification', 'edad', 'fechaNacimiento', 'phone', 'address',
-  'imc', 'hta', 'dm2', 'erc', 'icc', 'fa', 'uacr', 'fevi', 'eventoCV', 'dementia',
+  'imc', 'peso', 'hta', 'dm2', 'erc', 'icc', 'fa', 'uacr', 'fevi', 'eventoCV', 'dementia',
 ];
 
 function countFilledFields(patient) {

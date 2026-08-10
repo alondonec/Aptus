@@ -73,7 +73,10 @@ devuelve ÚNICAMENTE este JSON sin texto adicional:
 {name, identification (SOLO dígitos, sin prefijos como "CC-", "TI-" ni espacios),
 fechaNacimiento (formato YYYY-MM-DD si el documento la indica; si no, null),
 edad (number, solo como respaldo si no hay fecha de nacimiento en el documento),
-phone, address, imc, hta (boolean), dm2 (boolean), erc (boolean), icc (boolean),
+phone, address, imc, peso (kg, number; solo si el IMC no viene explícito pero el
+peso sí aparece en el documento), talla (metros, number, ej. 1.70; solo si el IMC
+no viene explícito pero la talla sí aparece — si el documento la da en centímetros
+conviértela a metros), hta (boolean), dm2 (boolean), erc (boolean), icc (boolean),
 fa (boolean), uacr, fevi, eventoCV (boolean), dementia (boolean), diagnostics}
 Reglas de negación: 'niega HTA' → hta:false | no menciona → null`;
 
@@ -83,6 +86,36 @@ Reglas de negación: 'niega HTA' → hta:false | no menciona → null`;
 function stripIdPrefix(identification) {
   if (typeof identification !== 'string') return identification;
   return identification.replace(/^[A-Za-z]{1,4}[\s.-]*/, '').trim() || identification;
+}
+
+/** Calcula el IMC con la fórmula del CDC (peso[kg] / talla[m]²) cuando el
+ * documento no lo trae explícito pero sí menciona peso y talla por separado.
+ * Normaliza la talla a metros si vino en centímetros (el modelo puede no
+ * hacer la conversión de forma consistente). */
+function computeImcFromPesoTalla(peso, talla) {
+  const pesoNum = Number(peso);
+  const tallaNum = Number(talla);
+  if (!Number.isFinite(pesoNum) || !Number.isFinite(tallaNum) || pesoNum <= 0 || tallaNum <= 0) {
+    return null;
+  }
+  const tallaMetros = tallaNum > 3 ? tallaNum / 100 : tallaNum;
+  const imc = pesoNum / (tallaMetros * tallaMetros);
+  return Math.round(imc * 10) / 10;
+}
+
+/** Si el IMC no vino explícito en la historia, intenta completarlo a partir
+ * de peso/talla extraídos del texto. `peso` se conserva en el paciente aunque
+ * no haya talla: matchEngine.js lo usa como criterio de respaldo (peso > 80kg
+ * ⇒ Apto) cuando de verdad no hay forma de calcular el IMC real. */
+function applyImcFallback(patient) {
+  if (!patient || (patient.imc !== null && patient.imc !== undefined && patient.imc !== '')) {
+    return patient;
+  }
+  const computed = computeImcFromPesoTalla(patient.peso, patient.talla);
+  if (computed !== null) {
+    patient.imc = computed;
+  }
+  return patient;
 }
 
 function translateAnthropicError(message) {
@@ -145,7 +178,7 @@ async function splitPdfBuffer(buffer, numParts) {
 function mergePatientResults(results) {
   const fields = [
     'name', 'identification', 'edad', 'fechaNacimiento', 'phone', 'address',
-    'imc', 'hta', 'dm2', 'erc', 'icc', 'fa', 'uacr', 'fevi', 'eventoCV', 'dementia',
+    'imc', 'peso', 'talla', 'hta', 'dm2', 'erc', 'icc', 'fa', 'uacr', 'fevi', 'eventoCV', 'dementia',
   ];
   const merged = {};
   for (const field of fields) {
@@ -356,7 +389,7 @@ app.post('/extract-pdf', upload.single('file'), async (req, res) => {
 
     const results = await extractPatientWithSplitting(req.file.buffer, req.file.originalname);
     const patients = results.map((r) => r.patient);
-    const patient = patients.length > 1 ? mergePatientResults(patients) : patients[0];
+    const patient = applyImcFallback(patients.length > 1 ? mergePatientResults(patients) : patients[0]);
 
     // Costo real (no estimado): suma los tokens de entrada/salida de todas las
     // llamadas al modelo que hizo falta hacer para esta historia (una sola,

@@ -18,6 +18,7 @@ export function patientToExportRow(p) {
     Telefono: p.phone,
     Direccion: p.address,
     IMC: p.imc,
+    'Peso (kg)': p.peso,
     HTA: p.hta,
     DM2: p.dm2,
     ERC: p.erc,

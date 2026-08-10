@@ -58,6 +58,23 @@ export function evaluateCriterion(patient, criterion) {
         };
       }
     }
+    // Respaldo específico para IMC: cuando la historia no trae IMC ni talla
+    // (así que no se pudo calcular con la fórmula del CDC en el backend), pero
+    // sí trae el peso, un peso > 80kg se asume suficiente para cumplir un
+    // criterio de IMC que exige un valor alto (>, >=) — regla de negocio
+    // explícita, no un cálculo real de IMC.
+    if (criterion.field === 'imc' && patient.peso !== null && patient.peso !== undefined) {
+      const requiresHigh = criterion.operator === '>' || criterion.operator === '>=';
+      if (requiresHigh) {
+        const pass = Number(patient.peso) > 80;
+        return {
+          pass,
+          reason: `${label}: sin IMC ni talla, peso registrado (${patient.peso}kg) ${
+            pass ? '> 80kg → se asume que cumple' : '≤ 80kg → no se asume que cumple'
+          }`,
+        };
+      }
+    }
     return {
       pass: false,
       indeterminate: true,

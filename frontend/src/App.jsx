@@ -76,6 +76,7 @@ function normalizeExtractedPatient(raw, source) {
     phone: raw.phone ?? null,
     address: raw.address ?? null,
     imc: raw.imc ?? null,
+    peso: raw.peso ?? null,
     hta: raw.hta ?? null,
     dm2: raw.dm2 ?? null,
     erc: raw.erc ?? null,
