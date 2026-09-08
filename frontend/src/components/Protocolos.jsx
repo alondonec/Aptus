@@ -81,6 +81,21 @@ function emptyCustomCriterion() {
   };
 }
 
+// Un grupo combina varios criterios (u otros grupos, anidados) con lógica
+// "al menos uno de" (OR) o "todos" (AND) — necesario para protocolos cuyos
+// criterios de inclusión no son una simple lista plana, sino algo como
+// "Edad ≥ 18 Y (Evento CV O Enfermedad coronaria intervenida O (DM2 Y
+// (Edad > 65 O ...)))".
+function emptyGroup() {
+  return {
+    id: `g${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+    type: 'group',
+    logicalOperator: 'OR',
+    label: '',
+    children: [],
+  };
+}
+
 function parseKeywords(text) {
   return text.split(',').map((k) => k.trim()).filter(Boolean);
 }
@@ -94,12 +109,332 @@ function formatCriterionLabel(c) {
   return `${c.label} ${c.operator === 'true' ? '= sí' : c.operator === 'false' ? '= no' : `${c.operator} ${c.value}`}`;
 }
 
+/** Versión recursiva de formatCriterionLabel: para un grupo, describe su
+ * operador lógico y encierra la descripción de cada hijo (hoja o subgrupo). */
+function formatNodeLabel(node) {
+  if (node?.type === 'group') {
+    const joiner = node.logicalOperator === 'OR' ? ' O ' : ' Y ';
+    const title = node.label?.trim() ? `${node.label}: ` : node.logicalOperator === 'OR' ? 'Al menos uno de: ' : 'Todos: ';
+    const inner = (node.children || []).map(formatNodeLabel).join(joiner);
+    return `${title}(${inner || 'vacío'})`;
+  }
+  return formatCriterionLabel(node);
+}
+
+/** Editor de una hoja (criterio simple): mismo formulario de siempre (campo,
+ * operador, valor/palabras clave), ahora parametrizado por props en vez de
+ * cerrar sobre el arreglo plano del padre, para poder anidarse dentro de
+ * grupos a cualquier profundidad. */
+function LeafEditor({ criterion: c, onChange, onRemove, suggestingIds, suggestError, onSuggestKeywords }) {
+  const isCustom = c.field === CUSTOM_FIELD_KEY;
+  const fieldDef = FIELD_OPTIONS.find((f) => f.key === c.field) || FIELD_OPTIONS[0];
+  const operators = fieldDef.type === 'number' ? NUMERIC_OPERATORS : BOOLEAN_OPERATORS;
+
+  function updateCriterion(patch) {
+    onChange({ ...c, ...patch });
+  }
+
+  return (
+    <div className="bg-slate-50 rounded-lg p-2 space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <select
+          value={c.field}
+          onChange={(e) => {
+            const nextField = FIELD_OPTIONS.find((f) => f.key === e.target.value);
+            if (nextField.key === CUSTOM_FIELD_KEY) {
+              updateCriterion({
+                field: CUSTOM_FIELD_KEY,
+                label: isCustom ? c.label : '',
+                operator: 'true',
+                value: undefined,
+                keywords: c.keywords || [],
+                keywordsInput: c.keywordsInput || '',
+              });
+            } else if (nextField.type === 'custom-preset') {
+              updateCriterion({
+                field: CUSTOM_FIELD_KEY,
+                label: nextField.label,
+                operator: 'true',
+                value: undefined,
+                keywords: nextField.keywords,
+                keywordsInput: nextField.keywords.join(', '),
+              });
+            } else {
+              const defaultKeywords =
+                nextField.type === 'number' ? DEFAULT_NUMERIC_KEYWORDS[nextField.key] || [] : [];
+              updateCriterion({
+                field: nextField.key,
+                label: nextField.label,
+                operator: nextField.type === 'boolean' ? 'true' : '<',
+                value: nextField.type === 'number' ? 0 : undefined,
+                keywords: nextField.type === 'number' ? defaultKeywords : undefined,
+                keywordsInput: nextField.type === 'number' ? defaultKeywords.join(', ') : undefined,
+              });
+            }
+          }}
+          className="text-sm rounded-md border border-slate-300 px-2 py-1.5 bg-white"
+        >
+          {FIELD_OPTIONS.map((f) => (
+            <option key={f.key} value={f.key}>
+              {f.label}
+            </option>
+          ))}
+        </select>
+
+        <select
+          value={c.operator}
+          onChange={(e) => updateCriterion({ operator: e.target.value })}
+          className="text-sm rounded-md border border-slate-300 px-2 py-1.5 bg-white"
+        >
+          {operators.map((op) => (
+            <option key={op.value} value={op.value}>
+              {op.label}
+            </option>
+          ))}
+        </select>
+
+        {fieldDef.type === 'number' && (
+          <input
+            type="number"
+            value={c.value ?? 0}
+            onChange={(e) => updateCriterion({ value: Number(e.target.value) })}
+            className="w-24 text-sm rounded-md border border-slate-300 px-2 py-1.5"
+          />
+        )}
+
+        <button
+          onClick={onRemove}
+          className="ml-auto text-slate-400 hover:text-red-500 transition-colors"
+        >
+          <Trash2 className="w-4 h-4" />
+        </button>
+      </div>
+
+      {!isCustom && fieldDef.type === 'number' && (
+        <div>
+          <div className="flex items-center justify-between mb-0.5">
+            <label className="text-[11px] font-medium text-slate-500">
+              Palabras clave de respaldo en diagnósticos (opcional, separadas por coma)
+            </label>
+            <button
+              onClick={() => onSuggestKeywords(c, updateCriterion)}
+              disabled={suggestingIds.has(c.id)}
+              className="inline-flex items-center gap-1 text-[11px] font-medium text-purple-600 hover:text-purple-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {suggestingIds.has(c.id) ? (
+                <Loader2 className="w-3 h-3 animate-spin" />
+              ) : (
+                <Wand2 className="w-3 h-3" />
+              )}
+              Sugerir con IA
+            </button>
+          </div>
+          <input
+            value={c.keywordsInput ?? ''}
+            onChange={(e) => {
+              const raw = e.target.value;
+              updateCriterion({ keywordsInput: raw, keywords: parseKeywords(raw) });
+            }}
+            placeholder="Ej: obesidad, sobrepeso"
+            className="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5"
+          />
+          <p className="text-[11px] text-slate-400 mt-0.5">
+            Si la historia no trae el valor numérico de {fieldDef.label}, se buscarán estas palabras en el
+            texto de diagnósticos para decidir si el criterio se cumple.
+          </p>
+        </div>
+      )}
+
+      {isCustom && (
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          <div>
+            <label className="text-[11px] font-medium text-slate-500 block mb-0.5">
+              Nombre del criterio
+            </label>
+            <input
+              value={c.label}
+              onChange={(e) => updateCriterion({ label: e.target.value })}
+              placeholder="Ej: Cáncer activo"
+              className="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5"
+            />
+          </div>
+          <div>
+            <div className="flex items-center justify-between mb-0.5">
+              <label className="text-[11px] font-medium text-slate-500">
+                Palabras clave en diagnósticos (separadas por coma)
+              </label>
+              <button
+                onClick={() => onSuggestKeywords(c, updateCriterion)}
+                disabled={suggestingIds.has(c.id)}
+                className="inline-flex items-center gap-1 text-[11px] font-medium text-purple-600 hover:text-purple-700 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {suggestingIds.has(c.id) ? (
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                ) : (
+                  <Wand2 className="w-3 h-3" />
+                )}
+                Sugerir con IA
+              </button>
+            </div>
+            <input
+              value={c.keywordsInput ?? ''}
+              onChange={(e) => {
+                const raw = e.target.value;
+                updateCriterion({ keywordsInput: raw, keywords: parseKeywords(raw) });
+              }}
+              placeholder="Ej: cáncer, neoplasia, oncológico"
+              className="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5"
+            />
+          </div>
+          {(!c.keywords || c.keywords.length === 0) && (
+            <p className="text-[11px] text-amber-600 sm:col-span-2">
+              Agrega al menos una palabra clave para que el motor NLP pueda evaluar este criterio
+              contra el texto de diagnósticos, o usa "Sugerir con IA".
+            </p>
+          )}
+          {suggestError && (
+            <p className="text-[11px] text-red-600 sm:col-span-2">{suggestError}</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Editor de un grupo: alterna entre "Al menos uno de" (OR) y "Todos" (AND),
+ * y renderiza sus hijos recursivamente — cada hijo puede ser a su vez otro
+ * grupo, lo que permite anidar (ej. un AND dentro de un OR) a cualquier
+ * profundidad, como requiere el criterio "DM2 con complicaciones Y (edad>65
+ * O tabaquismo O TFG<45)" dentro de un grupo OR más grande. */
+function GroupEditor({ group, onChange, onRemove, suggestingIds, suggestError, onSuggestKeywords, depth }) {
+  function updateChildAt(index, updatedChild) {
+    onChange({ ...group, children: group.children.map((c, i) => (i === index ? updatedChild : c)) });
+  }
+  function removeChildAt(index) {
+    onChange({ ...group, children: group.children.filter((_, i) => i !== index) });
+  }
+  function addLeafChild() {
+    onChange({ ...group, children: [...group.children, emptyCriterion()] });
+  }
+  function addCustomLeafChild() {
+    onChange({ ...group, children: [...group.children, emptyCustomCriterion()] });
+  }
+  function addSubgroup() {
+    onChange({ ...group, children: [...group.children, emptyGroup()] });
+  }
+
+  const isOr = group.logicalOperator === 'OR';
+
+  return (
+    <div className={`rounded-lg border-2 p-3 space-y-2 ${isOr ? 'border-purple-200 bg-purple-50/40' : 'border-blue-200 bg-blue-50/40'}`}>
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="inline-flex rounded-md border border-slate-300 overflow-hidden text-xs font-medium shrink-0">
+          <button
+            onClick={() => onChange({ ...group, logicalOperator: 'OR' })}
+            className={`px-2 py-1 transition-colors ${isOr ? 'bg-purple-600 text-white' : 'bg-white text-slate-600 hover:bg-slate-50'}`}
+          >
+            Al menos uno (O)
+          </button>
+          <button
+            onClick={() => onChange({ ...group, logicalOperator: 'AND' })}
+            className={`px-2 py-1 transition-colors ${!isOr ? 'bg-blue-600 text-white' : 'bg-white text-slate-600 hover:bg-slate-50'}`}
+          >
+            Todos (Y)
+          </button>
+        </div>
+        <input
+          value={group.label || ''}
+          onChange={(e) => onChange({ ...group, label: e.target.value })}
+          placeholder="Nombre del grupo (opcional, ej: Al menos uno de)"
+          className="flex-1 min-w-[160px] text-sm rounded-md border border-slate-300 px-2 py-1.5 bg-white"
+        />
+        <button onClick={onRemove} className="text-slate-400 hover:text-red-500 transition-colors shrink-0">
+          <Trash2 className="w-4 h-4" />
+        </button>
+      </div>
+
+      {group.children.length === 0 && (
+        <p className="text-xs text-slate-400 italic">Grupo vacío — agrega condiciones abajo.</p>
+      )}
+
+      <div className="space-y-2 pl-3 border-l-2 border-slate-300/70">
+        {group.children.map((child, i) => (
+          <CriterionNode
+            key={child.id}
+            node={child}
+            onChange={(updated) => updateChildAt(i, updated)}
+            onRemove={() => removeChildAt(i)}
+            suggestingIds={suggestingIds}
+            suggestError={suggestError}
+            onSuggestKeywords={onSuggestKeywords}
+            depth={depth + 1}
+          />
+        ))}
+      </div>
+
+      <div className="flex items-center gap-3 pt-1">
+        <button
+          onClick={addLeafChild}
+          className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700"
+        >
+          <Plus className="w-3.5 h-3.5" /> Criterio
+        </button>
+        <button
+          onClick={addCustomLeafChild}
+          className="inline-flex items-center gap-1 text-xs font-medium text-purple-600 hover:text-purple-700"
+        >
+          <Sparkles className="w-3.5 h-3.5" /> Personalizado
+        </button>
+        {depth < 4 && (
+          <button
+            onClick={addSubgroup}
+            className="inline-flex items-center gap-1 text-xs font-medium text-slate-600 hover:text-slate-700"
+          >
+            <Plus className="w-3.5 h-3.5" /> Subgrupo
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Despacha entre LeafEditor y GroupEditor según el tipo de nodo. */
+function CriterionNode({ node, onChange, onRemove, suggestingIds, suggestError, onSuggestKeywords, depth }) {
+  if (node.type === 'group') {
+    return (
+      <GroupEditor
+        group={node}
+        onChange={onChange}
+        onRemove={onRemove}
+        suggestingIds={suggestingIds}
+        suggestError={suggestError}
+        onSuggestKeywords={onSuggestKeywords}
+        depth={depth}
+      />
+    );
+  }
+  return (
+    <LeafEditor
+      criterion={node}
+      onChange={onChange}
+      onRemove={onRemove}
+      suggestingIds={suggestingIds}
+      suggestError={suggestError}
+      onSuggestKeywords={onSuggestKeywords}
+    />
+  );
+}
+
 function CriteriaEditor({ title, criteria, onChange }) {
   const [suggestingIds, setSuggestingIds] = useState(() => new Set());
   const [suggestError, setSuggestError] = useState(null);
 
-  function updateCriterion(id, patch) {
-    onChange(criteria.map((c) => (c.id === id ? { ...c, ...patch } : c)));
+  function updateAt(index, updatedNode) {
+    onChange(criteria.map((c, i) => (i === index ? updatedNode : c)));
+  }
+
+  function removeAt(index) {
+    onChange(criteria.filter((_, i) => i !== index));
   }
 
   function addCriterion() {
@@ -110,11 +445,11 @@ function CriteriaEditor({ title, criteria, onChange }) {
     onChange([...criteria, emptyCustomCriterion()]);
   }
 
-  function removeCriterion(id) {
-    onChange(criteria.filter((c) => c.id !== id));
+  function addGroup() {
+    onChange([...criteria, emptyGroup()]);
   }
 
-  async function handleSuggestKeywords(c) {
+  async function handleSuggestKeywords(c, applyPatch) {
     const name = c.label?.trim();
     if (!name) {
       setSuggestError('Escribe primero un nombre para el criterio antes de sugerir palabras clave.');
@@ -125,7 +460,7 @@ function CriteriaEditor({ title, criteria, onChange }) {
     try {
       const suggested = await suggestKeywords(name);
       const merged = Array.from(new Set([...(c.keywords || []), ...suggested]));
-      updateCriterion(c.id, { keywords: merged, keywordsInput: merged.join(', ') });
+      applyPatch({ keywords: merged, keywordsInput: merged.join(', ') });
     } catch (err) {
       setSuggestError(`No se pudieron sugerir palabras clave: ${err.message}`);
     } finally {
@@ -154,186 +489,30 @@ function CriteriaEditor({ title, criteria, onChange }) {
           >
             <Sparkles className="w-3.5 h-3.5" /> Criterio personalizado
           </button>
+          <button
+            onClick={addGroup}
+            className="inline-flex items-center gap-1 text-xs font-medium text-slate-600 hover:text-slate-700"
+          >
+            <Plus className="w-3.5 h-3.5" /> Agregar grupo (O / Y)
+          </button>
         </div>
       </div>
       {criteria.length === 0 && (
         <p className="text-xs text-slate-400 italic mb-2">Sin criterios definidos.</p>
       )}
       <div className="space-y-2">
-        {criteria.map((c) => {
-          const isCustom = c.field === CUSTOM_FIELD_KEY;
-          const fieldDef = FIELD_OPTIONS.find((f) => f.key === c.field) || FIELD_OPTIONS[0];
-          const operators =
-            fieldDef.type === 'number' ? NUMERIC_OPERATORS : BOOLEAN_OPERATORS;
-          return (
-            <div key={c.id} className="bg-slate-50 rounded-lg p-2 space-y-2">
-              <div className="flex flex-wrap items-center gap-2">
-                <select
-                  value={c.field}
-                  onChange={(e) => {
-                    const nextField = FIELD_OPTIONS.find((f) => f.key === e.target.value);
-                    if (nextField.key === CUSTOM_FIELD_KEY) {
-                      updateCriterion(c.id, {
-                        field: CUSTOM_FIELD_KEY,
-                        label: isCustom ? c.label : '',
-                        operator: 'true',
-                        value: undefined,
-                        keywords: c.keywords || [],
-                        keywordsInput: c.keywordsInput || '',
-                      });
-                    } else if (nextField.type === 'custom-preset') {
-                      updateCriterion(c.id, {
-                        field: CUSTOM_FIELD_KEY,
-                        label: nextField.label,
-                        operator: 'true',
-                        value: undefined,
-                        keywords: nextField.keywords,
-                        keywordsInput: nextField.keywords.join(', '),
-                      });
-                    } else {
-                      const defaultKeywords =
-                        nextField.type === 'number' ? DEFAULT_NUMERIC_KEYWORDS[nextField.key] || [] : [];
-                      updateCriterion(c.id, {
-                        field: nextField.key,
-                        label: nextField.label,
-                        operator: nextField.type === 'boolean' ? 'true' : '<',
-                        value: nextField.type === 'number' ? 0 : undefined,
-                        keywords: nextField.type === 'number' ? defaultKeywords : undefined,
-                        keywordsInput: nextField.type === 'number' ? defaultKeywords.join(', ') : undefined,
-                      });
-                    }
-                  }}
-                  className="text-sm rounded-md border border-slate-300 px-2 py-1.5 bg-white"
-                >
-                  {FIELD_OPTIONS.map((f) => (
-                    <option key={f.key} value={f.key}>
-                      {f.label}
-                    </option>
-                  ))}
-                </select>
-
-                <select
-                  value={c.operator}
-                  onChange={(e) => updateCriterion(c.id, { operator: e.target.value })}
-                  className="text-sm rounded-md border border-slate-300 px-2 py-1.5 bg-white"
-                >
-                  {operators.map((op) => (
-                    <option key={op.value} value={op.value}>
-                      {op.label}
-                    </option>
-                  ))}
-                </select>
-
-                {fieldDef.type === 'number' && (
-                  <input
-                    type="number"
-                    value={c.value ?? 0}
-                    onChange={(e) => updateCriterion(c.id, { value: Number(e.target.value) })}
-                    className="w-24 text-sm rounded-md border border-slate-300 px-2 py-1.5"
-                  />
-                )}
-
-                <button
-                  onClick={() => removeCriterion(c.id)}
-                  className="ml-auto text-slate-400 hover:text-red-500 transition-colors"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              </div>
-
-              {!isCustom && fieldDef.type === 'number' && (
-                <div>
-                  <div className="flex items-center justify-between mb-0.5">
-                    <label className="text-[11px] font-medium text-slate-500">
-                      Palabras clave de respaldo en diagnósticos (opcional, separadas por coma)
-                    </label>
-                    <button
-                      onClick={() => handleSuggestKeywords(c)}
-                      disabled={suggestingIds.has(c.id)}
-                      className="inline-flex items-center gap-1 text-[11px] font-medium text-purple-600 hover:text-purple-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      {suggestingIds.has(c.id) ? (
-                        <Loader2 className="w-3 h-3 animate-spin" />
-                      ) : (
-                        <Wand2 className="w-3 h-3" />
-                      )}
-                      Sugerir con IA
-                    </button>
-                  </div>
-                  <input
-                    value={c.keywordsInput ?? ''}
-                    onChange={(e) => {
-                      const raw = e.target.value;
-                      updateCriterion(c.id, { keywordsInput: raw, keywords: parseKeywords(raw) });
-                    }}
-                    placeholder="Ej: obesidad, sobrepeso"
-                    className="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5"
-                  />
-                  <p className="text-[11px] text-slate-400 mt-0.5">
-                    Si la historia no trae el valor numérico de {fieldDef.label}, se buscarán estas palabras en el
-                    texto de diagnósticos para decidir si el criterio se cumple.
-                  </p>
-                </div>
-              )}
-
-              {isCustom && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  <div>
-                    <label className="text-[11px] font-medium text-slate-500 block mb-0.5">
-                      Nombre del criterio
-                    </label>
-                    <input
-                      value={c.label}
-                      onChange={(e) => updateCriterion(c.id, { label: e.target.value })}
-                      placeholder="Ej: Cáncer activo"
-                      className="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5"
-                    />
-                  </div>
-                  <div>
-                    <div className="flex items-center justify-between mb-0.5">
-                      <label className="text-[11px] font-medium text-slate-500">
-                        Palabras clave en diagnósticos (separadas por coma)
-                      </label>
-                      <button
-                        onClick={() => handleSuggestKeywords(c)}
-                        disabled={suggestingIds.has(c.id)}
-                        className="inline-flex items-center gap-1 text-[11px] font-medium text-purple-600 hover:text-purple-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        {suggestingIds.has(c.id) ? (
-                          <Loader2 className="w-3 h-3 animate-spin" />
-                        ) : (
-                          <Wand2 className="w-3 h-3" />
-                        )}
-                        Sugerir con IA
-                      </button>
-                    </div>
-                    <input
-                      value={c.keywordsInput ?? ''}
-                      onChange={(e) => {
-                        const raw = e.target.value;
-                        updateCriterion(c.id, {
-                          keywordsInput: raw,
-                          keywords: parseKeywords(raw),
-                        });
-                      }}
-                      placeholder="Ej: cáncer, neoplasia, oncológico"
-                      className="w-full text-sm rounded-md border border-slate-300 px-2 py-1.5"
-                    />
-                  </div>
-                  {(!c.keywords || c.keywords.length === 0) && (
-                    <p className="text-[11px] text-amber-600 sm:col-span-2">
-                      Agrega al menos una palabra clave para que el motor NLP pueda evaluar este criterio
-                      contra el texto de diagnósticos, o usa "Sugerir con IA".
-                    </p>
-                  )}
-                  {suggestError && (
-                    <p className="text-[11px] text-red-600 sm:col-span-2">{suggestError}</p>
-                  )}
-                </div>
-              )}
-            </div>
-          );
-        })}
+        {criteria.map((node, i) => (
+          <CriterionNode
+            key={node.id}
+            node={node}
+            onChange={(updated) => updateAt(i, updated)}
+            onRemove={() => removeAt(i)}
+            suggestingIds={suggestingIds}
+            suggestError={suggestError}
+            onSuggestKeywords={handleSuggestKeywords}
+            depth={0}
+          />
+        ))}
       </div>
     </div>
   );
@@ -530,7 +709,7 @@ export default function Protocolos({ protocols, onSaveProtocol, onDeleteProtocol
                   <ul className="space-y-1">
                     {protocol.inclusionCriteria.map((c) => (
                       <li key={c.id} className="px-2 py-1 rounded bg-green-50 text-green-700">
-                        {formatCriterionLabel(c)}
+                        {formatNodeLabel(c)}
                       </li>
                     ))}
                     {protocol.inclusionCriteria.length === 0 && (
@@ -543,7 +722,7 @@ export default function Protocolos({ protocols, onSaveProtocol, onDeleteProtocol
                   <ul className="space-y-1">
                     {protocol.exclusionCriteria.map((c) => (
                       <li key={c.id} className="px-2 py-1 rounded bg-red-50 text-red-700">
-                        {formatCriterionLabel(c)}
+                        {formatNodeLabel(c)}
                       </li>
                     ))}
                     {protocol.exclusionCriteria.length === 0 && (

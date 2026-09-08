@@ -113,6 +113,42 @@ export function evaluateCriterion(patient, criterion) {
 }
 
 /**
+ * Describe en una sola línea el resultado de un grupo, listando cada hijo con
+ * su propio ✔/✘ para que se pueda ver exactamente cuál de las condiciones del
+ * grupo falló, sin tener que abrir un detalle aparte.
+ */
+function describeGroupResult(node, childResults, pass) {
+  const opLabel = node.logicalOperator === 'OR' ? 'al menos uno de' : 'todos de';
+  const title = node.label?.trim() || `Grupo (${opLabel})`;
+  const parts = childResults.map((r) => `${r.pass ? '✔' : '✘'} ${r.reason}`);
+  return `${title} [${opLabel}]: ${pass ? 'cumple' : 'no cumple'} (${parts.join(' · ')})`;
+}
+
+/**
+ * Evalúa un nodo del árbol de criterios: una hoja (mismo comportamiento que
+ * siempre, vía evaluateCriterion) o un grupo (AND/OR) que combina los
+ * resultados de sus hijos recursivamente. Los grupos permiten representar
+ * protocolos con lógica del tipo "al menos uno de X, Y, Z" o combinaciones
+ * anidadas, algo que una lista plana de criterios no puede expresar.
+ */
+export function evaluateNode(patient, node) {
+  if (node.type === 'group') {
+    const childResults = (node.children || []).map((child) => evaluateNode(patient, child));
+    const pass = node.logicalOperator === 'OR'
+      ? childResults.some((r) => r.pass)
+      : childResults.every((r) => r.pass);
+    return {
+      pass,
+      isGroup: true,
+      logicalOperator: node.logicalOperator,
+      children: childResults,
+      reason: describeGroupResult(node, childResults, pass),
+    };
+  }
+  return evaluateCriterion(patient, node);
+}
+
+/**
  * Evalúa un paciente contra un protocolo completo, aplicando primero el
  * motor NLP de negaciones para completar campos faltantes.
  */
@@ -134,11 +170,11 @@ export function evaluatePatientForProtocol(patient, protocol) {
   const resolved = resolvePatientFlags(patient);
 
   const inclusionResults = protocol.inclusionCriteria.map((c) => ({
-    ...evaluateCriterion(resolved, c),
+    ...evaluateNode(resolved, c),
     criterion: c,
   }));
   const exclusionResults = protocol.exclusionCriteria.map((c) => ({
-    ...evaluateCriterion(resolved, c),
+    ...evaluateNode(resolved, c),
     criterion: c,
   }));
 
