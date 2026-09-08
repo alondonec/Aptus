@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Plus, Trash2, Pencil, X, Save, ClipboardList, Sparkles, Loader2, Wand2 } from 'lucide-react';
+import { Plus, Trash2, Pencil, X, Save, ClipboardList, Sparkles, Loader2, Wand2, ChevronDown, ChevronRight, AlertCircle } from 'lucide-react';
 import { FIELD_DEFS } from '../data/mockData';
 import { suggestKeywords } from '../utils/api';
 
@@ -135,7 +135,7 @@ function LeafEditor({ criterion: c, onChange, onRemove, suggestingIds, suggestEr
   }
 
   return (
-    <div className="bg-slate-50 rounded-lg p-2 space-y-2">
+    <div className="bg-white border border-slate-200 rounded-md px-2.5 py-2 space-y-1.5">
       <div className="flex flex-wrap items-center gap-2">
         <select
           value={c.field}
@@ -287,9 +287,10 @@ function LeafEditor({ criterion: c, onChange, onRemove, suggestingIds, suggestEr
             />
           </div>
           {(!c.keywords || c.keywords.length === 0) && (
-            <p className="text-[11px] text-amber-600 sm:col-span-2">
-              Agrega al menos una palabra clave para que el motor NLP pueda evaluar este criterio
-              contra el texto de diagnósticos, o usa "Sugerir con IA".
+            <p className="text-[11px] text-slate-400 sm:col-span-2 flex items-center gap-1">
+              <AlertCircle className="w-3 h-3 shrink-0" />
+              Sin palabras clave: este criterio siempre quedará "sin dato" — útil si es intencional
+              (revisión manual), o agrega palabras clave / usa "Sugerir con IA" para automatizarlo.
             </p>
           )}
           {suggestError && (
@@ -301,12 +302,77 @@ function LeafEditor({ criterion: c, onChange, onRemove, suggestingIds, suggestEr
   );
 }
 
+/** Pastilla compacta para alternar entre O (al menos uno) y Y (todos) — un
+ * solo control de dos letras en vez de dos botones con texto largo, para que
+ * el ojo lo lea como un símbolo, no como una frase más que leer. */
+function LogicToggle({ value, onChange }) {
+  const isOr = value === 'OR';
+  return (
+    <div className="inline-flex rounded-full border border-slate-300 overflow-hidden text-xs font-bold shrink-0">
+      <button
+        type="button"
+        onClick={() => onChange('OR')}
+        title="Al menos uno de sus hijos debe cumplirse"
+        className={`w-7 h-7 flex items-center justify-center transition-colors ${
+          isOr ? 'bg-purple-600 text-white' : 'bg-white text-slate-400 hover:bg-slate-50'
+        }`}
+      >
+        O
+      </button>
+      <button
+        type="button"
+        onClick={() => onChange('AND')}
+        title="Todos sus hijos deben cumplirse"
+        className={`w-7 h-7 flex items-center justify-center transition-colors ${
+          !isOr ? 'bg-blue-600 text-white' : 'bg-white text-slate-400 hover:bg-slate-50'
+        }`}
+      >
+        Y
+      </button>
+    </div>
+  );
+}
+
+/** Línea divisoria con una pastilla "O"/"Y" al centro, entre cada par de
+ * condiciones hermanas dentro de un grupo — así la lógica se lee de corrido
+ * ("condición A" → O → "condición B") en vez de tener que subir la vista al
+ * encabezado del grupo para recordar qué operador aplica. */
+function LogicConnector({ operator }) {
+  const isOr = operator === 'OR';
+  return (
+    <div className="flex items-center gap-2 py-0.5" aria-hidden="true">
+      <div className="flex-1 border-t border-dashed border-slate-300" />
+      <span
+        className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+          isOr ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'
+        }`}
+      >
+        {isOr ? 'O' : 'Y'}
+      </span>
+      <div className="flex-1 border-t border-dashed border-slate-300" />
+    </div>
+  );
+}
+
+/** Resumen de una línea para un grupo colapsado — "3 condiciones: Evento
+ * cardiovascular, Enfermedad coronaria intervenida y 1 más". */
+function summarizeGroupChildren(children) {
+  if (!children || children.length === 0) return 'vacío';
+  const names = children.map((c) => (c.type === 'group' ? c.label?.trim() || 'subgrupo' : c.label?.trim() || 'criterio sin nombre'));
+  if (names.length <= 2) return names.join(' · ');
+  return `${names.slice(0, 2).join(' · ')} y ${names.length - 2} más`;
+}
+
 /** Editor de un grupo: alterna entre "Al menos uno de" (OR) y "Todos" (AND),
  * y renderiza sus hijos recursivamente — cada hijo puede ser a su vez otro
  * grupo, lo que permite anidar (ej. un AND dentro de un OR) a cualquier
  * profundidad, como requiere el criterio "DM2 con complicaciones Y (edad>65
- * O tabaquismo O TFG<45)" dentro de un grupo OR más grande. */
+ * O tabaquismo O TFG<45)" dentro de un grupo OR más grande. Se muestra como
+ * una barra de color a la izquierda (no una caja completa) para que anidar
+ * varios niveles no se sienta como cajas dentro de cajas dentro de cajas. */
 function GroupEditor({ group, onChange, onRemove, suggestingIds, suggestError, onSuggestKeywords, depth }) {
+  const [collapsed, setCollapsed] = useState(false);
+
   function updateChildAt(index, updatedChild) {
     onChange({ ...group, children: group.children.map((c, i) => (i === index ? updatedChild : c)) });
   }
@@ -324,76 +390,83 @@ function GroupEditor({ group, onChange, onRemove, suggestingIds, suggestError, o
   }
 
   const isOr = group.logicalOperator === 'OR';
+  const accent = isOr ? 'border-purple-400' : 'border-blue-400';
+  const headerBg = isOr ? 'bg-purple-50' : 'bg-blue-50';
 
   return (
-    <div className={`rounded-lg border-2 p-3 space-y-2 ${isOr ? 'border-purple-200 bg-purple-50/40' : 'border-blue-200 bg-blue-50/40'}`}>
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="inline-flex rounded-md border border-slate-300 overflow-hidden text-xs font-medium shrink-0">
-          <button
-            onClick={() => onChange({ ...group, logicalOperator: 'OR' })}
-            className={`px-2 py-1 transition-colors ${isOr ? 'bg-purple-600 text-white' : 'bg-white text-slate-600 hover:bg-slate-50'}`}
-          >
-            Al menos uno (O)
-          </button>
-          <button
-            onClick={() => onChange({ ...group, logicalOperator: 'AND' })}
-            className={`px-2 py-1 transition-colors ${!isOr ? 'bg-blue-600 text-white' : 'bg-white text-slate-600 hover:bg-slate-50'}`}
-          >
-            Todos (Y)
-          </button>
-        </div>
+    <div className={`border-l-4 ${accent} rounded-sm`}>
+      <div className={`flex flex-wrap items-center gap-2 ${headerBg} rounded-r-md pl-2 pr-1.5 py-1.5`}>
+        <button
+          type="button"
+          onClick={() => setCollapsed((v) => !v)}
+          className="text-slate-500 hover:text-slate-700 shrink-0"
+          title={collapsed ? 'Expandir grupo' : 'Colapsar grupo'}
+        >
+          {collapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+        </button>
+        <LogicToggle value={group.logicalOperator} onChange={(op) => onChange({ ...group, logicalOperator: op })} />
         <input
           value={group.label || ''}
           onChange={(e) => onChange({ ...group, label: e.target.value })}
-          placeholder="Nombre del grupo (opcional, ej: Al menos uno de)"
-          className="flex-1 min-w-[160px] text-sm rounded-md border border-slate-300 px-2 py-1.5 bg-white"
+          placeholder={isOr ? 'Nombre del grupo (ej: Al menos uno de)' : 'Nombre del grupo (ej: Todos estos)'}
+          className="flex-1 min-w-[140px] text-sm font-medium rounded-md border border-transparent bg-white/70 px-2 py-1 focus:border-slate-300 focus:bg-white"
         />
+        <span className="text-[11px] text-slate-400 shrink-0">
+          {group.children.length} {group.children.length === 1 ? 'condición' : 'condiciones'}
+        </span>
         <button onClick={onRemove} className="text-slate-400 hover:text-red-500 transition-colors shrink-0">
           <Trash2 className="w-4 h-4" />
         </button>
       </div>
 
-      {group.children.length === 0 && (
-        <p className="text-xs text-slate-400 italic">Grupo vacío — agrega condiciones abajo.</p>
+      {collapsed ? (
+        <p className="text-xs text-slate-500 italic pl-4 py-1.5">{summarizeGroupChildren(group.children)}</p>
+      ) : (
+        <div className="pl-4 pt-2 space-y-0">
+          {group.children.length === 0 && (
+            <p className="text-xs text-slate-400 italic pb-2">Grupo vacío — agrega condiciones abajo.</p>
+          )}
+          {group.children.map((child, i) => (
+            <div key={child.id}>
+              {i > 0 && <LogicConnector operator={group.logicalOperator} />}
+              <div className="py-1">
+                <CriterionNode
+                  node={child}
+                  onChange={(updated) => updateChildAt(i, updated)}
+                  onRemove={() => removeChildAt(i)}
+                  suggestingIds={suggestingIds}
+                  suggestError={suggestError}
+                  onSuggestKeywords={onSuggestKeywords}
+                  depth={depth + 1}
+                />
+              </div>
+            </div>
+          ))}
+
+          <div className="flex items-center gap-3 pt-1 pb-2">
+            <button
+              onClick={addLeafChild}
+              className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700"
+            >
+              <Plus className="w-3.5 h-3.5" /> Criterio
+            </button>
+            <button
+              onClick={addCustomLeafChild}
+              className="inline-flex items-center gap-1 text-xs font-medium text-purple-600 hover:text-purple-700"
+            >
+              <Sparkles className="w-3.5 h-3.5" /> Personalizado
+            </button>
+            {depth < 4 && (
+              <button
+                onClick={addSubgroup}
+                className="inline-flex items-center gap-1 text-xs font-medium text-slate-600 hover:text-slate-700"
+              >
+                <Plus className="w-3.5 h-3.5" /> Subgrupo
+              </button>
+            )}
+          </div>
+        </div>
       )}
-
-      <div className="space-y-2 pl-3 border-l-2 border-slate-300/70">
-        {group.children.map((child, i) => (
-          <CriterionNode
-            key={child.id}
-            node={child}
-            onChange={(updated) => updateChildAt(i, updated)}
-            onRemove={() => removeChildAt(i)}
-            suggestingIds={suggestingIds}
-            suggestError={suggestError}
-            onSuggestKeywords={onSuggestKeywords}
-            depth={depth + 1}
-          />
-        ))}
-      </div>
-
-      <div className="flex items-center gap-3 pt-1">
-        <button
-          onClick={addLeafChild}
-          className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700"
-        >
-          <Plus className="w-3.5 h-3.5" /> Criterio
-        </button>
-        <button
-          onClick={addCustomLeafChild}
-          className="inline-flex items-center gap-1 text-xs font-medium text-purple-600 hover:text-purple-700"
-        >
-          <Sparkles className="w-3.5 h-3.5" /> Personalizado
-        </button>
-        {depth < 4 && (
-          <button
-            onClick={addSubgroup}
-            className="inline-flex items-center gap-1 text-xs font-medium text-slate-600 hover:text-slate-700"
-          >
-            <Plus className="w-3.5 h-3.5" /> Subgrupo
-          </button>
-        )}
-      </div>
     </div>
   );
 }
@@ -500,18 +573,22 @@ function CriteriaEditor({ title, criteria, onChange }) {
       {criteria.length === 0 && (
         <p className="text-xs text-slate-400 italic mb-2">Sin criterios definidos.</p>
       )}
-      <div className="space-y-2">
+      <div>
         {criteria.map((node, i) => (
-          <CriterionNode
-            key={node.id}
-            node={node}
-            onChange={(updated) => updateAt(i, updated)}
-            onRemove={() => removeAt(i)}
-            suggestingIds={suggestingIds}
-            suggestError={suggestError}
-            onSuggestKeywords={handleSuggestKeywords}
-            depth={0}
-          />
+          <div key={node.id}>
+            {i > 0 && <LogicConnector operator="AND" />}
+            <div className="py-1">
+              <CriterionNode
+                node={node}
+                onChange={(updated) => updateAt(i, updated)}
+                onRemove={() => removeAt(i)}
+                suggestingIds={suggestingIds}
+                suggestError={suggestError}
+                onSuggestKeywords={handleSuggestKeywords}
+                depth={0}
+              />
+            </div>
+          </div>
         ))}
       </div>
     </div>
