@@ -152,9 +152,15 @@ function assignIdsRecursive(nodes) {
 /** Punto de color que muestra si un criterio/grupo se cumplió (verde), no se
  * cumplió (rojo) o no se pudo evaluar (gris) al probar el árbol contra un
  * paciente real — ver el selector de "paciente de prueba" en ProtocolEditor. */
-function StatusDot({ result }) {
+// Para inclusión, pass:true es bueno (verde). Para exclusión es al revés:
+// pass:true significa que la exclusión SÍ se activó (malo, rojo), y
+// pass:false significa que no hay evidencia de esa condición (bueno para el
+// paciente, no debe verse en rojo) — mismo criterio que ya usa CriterionRow
+// en MatrizCompatibilidad.jsx para esto.
+function StatusDot({ result, invert }) {
   if (!result) return null;
-  const color = result.indeterminate ? 'bg-slate-300' : result.pass ? 'bg-green-500' : 'bg-red-500';
+  const good = result.indeterminate ? invert : invert ? !result.pass : result.pass;
+  const color = result.indeterminate ? 'bg-slate-300' : good ? 'bg-green-500' : 'bg-red-500';
   return <span title={result.reason} className={`inline-block w-2.5 h-2.5 rounded-full shrink-0 ${color}`} />;
 }
 
@@ -216,7 +222,7 @@ function CriteriaOutline({ criteria }) {
  * operador, valor/palabras clave), ahora parametrizado por props en vez de
  * cerrar sobre el arreglo plano del padre, para poder anidarse dentro de
  * grupos a cualquier profundidad. */
-function LeafEditor({ criterion: c, onChange, onRemove, suggestingIds, suggestError, onSuggestKeywords, testResult }) {
+function LeafEditor({ criterion: c, onChange, onRemove, suggestingIds, suggestError, onSuggestKeywords, testResult, invert }) {
   const isCustom = c.field === CUSTOM_FIELD_KEY;
   const fieldDef = FIELD_OPTIONS.find((f) => f.key === c.field) || FIELD_OPTIONS[0];
   const operators = fieldDef.type === 'number' ? NUMERIC_OPERATORS : BOOLEAN_OPERATORS;
@@ -294,7 +300,7 @@ function LeafEditor({ criterion: c, onChange, onRemove, suggestingIds, suggestEr
         )}
 
         <span className="ml-auto flex items-center gap-2">
-          <StatusDot result={testResult} />
+          <StatusDot result={testResult} invert={invert} />
           <button onClick={onRemove} className="text-slate-400 hover:text-red-500 transition-colors">
             <Trash2 className="w-4 h-4" />
           </button>
@@ -461,7 +467,7 @@ function summarizeGroupChildren(children) {
  * O tabaquismo O TFG<45)" dentro de un grupo OR más grande. Se muestra como
  * una barra de color a la izquierda (no una caja completa) para que anidar
  * varios niveles no se sienta como cajas dentro de cajas dentro de cajas. */
-function GroupEditor({ group, onChange, onRemove, suggestingIds, suggestError, onSuggestKeywords, depth, testResult }) {
+function GroupEditor({ group, onChange, onRemove, suggestingIds, suggestError, onSuggestKeywords, depth, testResult, invert }) {
   const [collapsed, setCollapsed] = useState(false);
 
   function updateChildAt(index, updatedChild) {
@@ -505,7 +511,7 @@ function GroupEditor({ group, onChange, onRemove, suggestingIds, suggestError, o
         <span className="text-[11px] text-slate-400 shrink-0">
           {group.children.length} {group.children.length === 1 ? 'condición' : 'condiciones'}
         </span>
-        <StatusDot result={testResult} />
+        <StatusDot result={testResult} invert={invert} />
         <button onClick={onRemove} className="text-slate-400 hover:text-red-500 transition-colors shrink-0">
           <Trash2 className="w-4 h-4" />
         </button>
@@ -531,6 +537,7 @@ function GroupEditor({ group, onChange, onRemove, suggestingIds, suggestError, o
                   onSuggestKeywords={onSuggestKeywords}
                   depth={depth + 1}
                   testResult={testResult?.children?.[i]}
+                  invert={invert}
                 />
               </div>
             </div>
@@ -565,7 +572,7 @@ function GroupEditor({ group, onChange, onRemove, suggestingIds, suggestError, o
 }
 
 /** Despacha entre LeafEditor y GroupEditor según el tipo de nodo. */
-function CriterionNode({ node, onChange, onRemove, suggestingIds, suggestError, onSuggestKeywords, depth, testResult }) {
+function CriterionNode({ node, onChange, onRemove, suggestingIds, suggestError, onSuggestKeywords, depth, testResult, invert }) {
   if (node.type === 'group') {
     return (
       <GroupEditor
@@ -577,6 +584,7 @@ function CriterionNode({ node, onChange, onRemove, suggestingIds, suggestError, 
         onSuggestKeywords={onSuggestKeywords}
         depth={depth}
         testResult={testResult}
+        invert={invert}
       />
     );
   }
@@ -589,11 +597,12 @@ function CriterionNode({ node, onChange, onRemove, suggestingIds, suggestError, 
       suggestError={suggestError}
       onSuggestKeywords={onSuggestKeywords}
       testResult={testResult}
+      invert={invert}
     />
   );
 }
 
-function CriteriaEditor({ title, criteria, onChange, testResults }) {
+function CriteriaEditor({ title, criteria, onChange, testResults, invert }) {
   const [suggestingIds, setSuggestingIds] = useState(() => new Set());
   const [suggestError, setSuggestError] = useState(null);
   const [viewMode, setViewMode] = useState('tree');
@@ -712,6 +721,7 @@ function CriteriaEditor({ title, criteria, onChange, testResults }) {
                     onSuggestKeywords={handleSuggestKeywords}
                     depth={0}
                     testResult={testResults?.[i]}
+                    invert={invert}
                   />
                 </div>
               </div>
@@ -997,6 +1007,7 @@ function ProtocolEditor({ protocol, patients, onSave, onCancel, saving }) {
         criteria={exclusionCriteria}
         onChange={setExclusionCriteria}
         testResults={testResult && !testResult.excluded ? testResult.exclusionResults : undefined}
+        invert
       />
 
       <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
