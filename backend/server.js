@@ -463,6 +463,14 @@ campos de arriba pero que SÍ se pueda buscar como texto en los diagnósticos de
 field:"custom", operator:"true", un "label" descriptivo, y "keywords" con 4-10 variantes en español (con y sin
 tilde, sinónimos clínicos, abreviaturas) que probablemente aparezcan en el texto libre de diagnósticos.
 
+IMPORTANTE sobre operator:"true"/"false" en criterios booleanos (estructurados o "custom") dentro de
+exclusionCriteria: usa SIEMPRE operator:"true" para representar la condición tal como está descrita — el
+arreglo de exclusión ya interpreta por sí solo que cumplir el criterio activa la exclusión. Ejemplo: "Cáncer
+activo" como criterio de exclusión es {"field":"custom","operator":"true","label":"Cáncer activo",...} (NO
+"false") — poner "false" invertiría la lógica y dejaría pasar exactamente a los pacientes que se querían
+excluir. Usa operator:"false" únicamente cuando el texto pida explícitamente lo contrario de un campo
+estructurado dentro de inclusionCriteria (ej. "sin antecedente de demencia" como requisito de inclusión).
+
 CRITERIOS QUE APTUS NO PUEDE EVALUAR AUTOMÁTICAMENTE porque dependen de un dato que NUNCA se extrae de las
 historias clínicas — dosis o combinación de medicamentos, duración de un tratamiento, tabaquismo/hábito
 tabáquico, o un valor de laboratorio puntual distinto a los numéricos de arriba (TFG/eGFR, LDL, HbA1c, etc.):
