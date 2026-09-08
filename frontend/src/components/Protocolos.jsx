@@ -1,7 +1,8 @@
-import { useState } from 'react';
-import { Plus, Trash2, Pencil, X, Save, ClipboardList, Sparkles, Loader2, Wand2, ChevronDown, ChevronRight, AlertCircle } from 'lucide-react';
+import { useState, useMemo } from 'react';
+import { Plus, Trash2, Pencil, X, Save, ClipboardList, Sparkles, Loader2, Wand2, ChevronDown, ChevronRight, AlertCircle, List, GitBranch, Search } from 'lucide-react';
 import { FIELD_DEFS } from '../data/mockData';
-import { suggestKeywords } from '../utils/api';
+import { suggestKeywords, parseProtocolCriteria } from '../utils/api';
+import { evaluatePatientForProtocol } from '../utils/matchEngine';
 
 const CUSTOM_FIELD_KEY = 'custom';
 
@@ -121,11 +122,101 @@ function formatNodeLabel(node) {
   return formatCriterionLabel(node);
 }
 
+/** El texto generado por IA (o pegado desde otra fuente) no trae "id" en sus
+ * nodos — Aptus siempre los asigna acá, recorriendo el árbol completo, para
+ * garantizar que sean únicos incluso entre nodos generados en el mismo
+ * milisegundo. También completa "keywordsInput" a partir de "keywords" para
+ * que el campo de texto del editor arranque ya lleno. */
+function assignIdsRecursive(nodes) {
+  let counter = 0;
+  function walk(list) {
+    return (list || []).map((node) => {
+      counter += 1;
+      if (node.type === 'group') {
+        return {
+          ...node,
+          id: node.id || `g${Date.now()}-${counter}-${Math.random().toString(36).slice(2, 6)}`,
+          children: walk(node.children),
+        };
+      }
+      return {
+        ...node,
+        id: node.id || `c${Date.now()}-${counter}-${Math.random().toString(36).slice(2, 6)}`,
+        keywordsInput: node.keywordsInput ?? (node.keywords ? node.keywords.join(', ') : ''),
+      };
+    });
+  }
+  return walk(nodes);
+}
+
+/** Punto de color que muestra si un criterio/grupo se cumplió (verde), no se
+ * cumplió (rojo) o no se pudo evaluar (gris) al probar el árbol contra un
+ * paciente real — ver el selector de "paciente de prueba" en ProtocolEditor. */
+function StatusDot({ result }) {
+  if (!result) return null;
+  const color = result.indeterminate ? 'bg-slate-300' : result.pass ? 'bg-green-500' : 'bg-red-500';
+  return <span title={result.reason} className={`inline-block w-2.5 h-2.5 rounded-full shrink-0 ${color}`} />;
+}
+
+/** Describe una hoja como prosa legible para la vista de texto — igual que
+ * formatCriterionLabel pero identificando además los criterios de "revisar
+ * manualmente" (personalizado sin palabras clave) para marcarlos aparte. */
+function describeLeafForOutline(c) {
+  const isManual = c.field === CUSTOM_FIELD_KEY && (!c.keywords || c.keywords.length === 0);
+  return { text: formatCriterionLabel(c), manual: isManual };
+}
+
+/** Nodo recursivo de la vista de texto (outline): un grupo se numera con
+ * letras (a, b, c) y su título se colorea según sea O (morado) o Y (azul);
+ * una hoja de "revisar manualmente" lleva una pastilla ámbar aparte, para que
+ * se pueda leer el protocolo de corrido como si fuera el documento original,
+ * en vez de tener que reconstruir la lógica leyendo cajas y flechas. */
+function CriteriaOutlineNode({ node }) {
+  if (node?.type === 'group') {
+    const isOr = node.logicalOperator === 'OR';
+    const title = node.label?.trim() || (isOr ? 'Al menos uno de' : 'Todos los siguientes');
+    return (
+      <li>
+        <span className={`font-medium ${isOr ? 'text-purple-700' : 'text-blue-700'}`}>{title}:</span>
+        <ol className="list-[lower-alpha] ml-5 mt-0.5 space-y-1">
+          {(node.children || []).map((child) => (
+            <CriteriaOutlineNode key={child.id} node={child} />
+          ))}
+        </ol>
+      </li>
+    );
+  }
+  const { text, manual } = describeLeafForOutline(node);
+  return (
+    <li>
+      {text}
+      {manual && (
+        <span className="ml-1.5 inline-flex items-center gap-0.5 text-[10px] font-medium text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded-full align-middle">
+          <AlertCircle className="w-2.5 h-2.5" /> revisar manualmente
+        </span>
+      )}
+    </li>
+  );
+}
+
+function CriteriaOutline({ criteria }) {
+  if (!criteria || criteria.length === 0) {
+    return <p className="text-xs text-slate-400 italic">Sin criterios definidos.</p>;
+  }
+  return (
+    <ol className="list-decimal ml-5 space-y-1.5 text-sm text-slate-700">
+      {criteria.map((node) => (
+        <CriteriaOutlineNode key={node.id} node={node} />
+      ))}
+    </ol>
+  );
+}
+
 /** Editor de una hoja (criterio simple): mismo formulario de siempre (campo,
  * operador, valor/palabras clave), ahora parametrizado por props en vez de
  * cerrar sobre el arreglo plano del padre, para poder anidarse dentro de
  * grupos a cualquier profundidad. */
-function LeafEditor({ criterion: c, onChange, onRemove, suggestingIds, suggestError, onSuggestKeywords }) {
+function LeafEditor({ criterion: c, onChange, onRemove, suggestingIds, suggestError, onSuggestKeywords, testResult }) {
   const isCustom = c.field === CUSTOM_FIELD_KEY;
   const fieldDef = FIELD_OPTIONS.find((f) => f.key === c.field) || FIELD_OPTIONS[0];
   const operators = fieldDef.type === 'number' ? NUMERIC_OPERATORS : BOOLEAN_OPERATORS;
@@ -202,12 +293,12 @@ function LeafEditor({ criterion: c, onChange, onRemove, suggestingIds, suggestEr
           />
         )}
 
-        <button
-          onClick={onRemove}
-          className="ml-auto text-slate-400 hover:text-red-500 transition-colors"
-        >
-          <Trash2 className="w-4 h-4" />
-        </button>
+        <span className="ml-auto flex items-center gap-2">
+          <StatusDot result={testResult} />
+          <button onClick={onRemove} className="text-slate-400 hover:text-red-500 transition-colors">
+            <Trash2 className="w-4 h-4" />
+          </button>
+        </span>
       </div>
 
       {!isCustom && fieldDef.type === 'number' && (
@@ -370,7 +461,7 @@ function summarizeGroupChildren(children) {
  * O tabaquismo O TFG<45)" dentro de un grupo OR más grande. Se muestra como
  * una barra de color a la izquierda (no una caja completa) para que anidar
  * varios niveles no se sienta como cajas dentro de cajas dentro de cajas. */
-function GroupEditor({ group, onChange, onRemove, suggestingIds, suggestError, onSuggestKeywords, depth }) {
+function GroupEditor({ group, onChange, onRemove, suggestingIds, suggestError, onSuggestKeywords, depth, testResult }) {
   const [collapsed, setCollapsed] = useState(false);
 
   function updateChildAt(index, updatedChild) {
@@ -414,6 +505,7 @@ function GroupEditor({ group, onChange, onRemove, suggestingIds, suggestError, o
         <span className="text-[11px] text-slate-400 shrink-0">
           {group.children.length} {group.children.length === 1 ? 'condición' : 'condiciones'}
         </span>
+        <StatusDot result={testResult} />
         <button onClick={onRemove} className="text-slate-400 hover:text-red-500 transition-colors shrink-0">
           <Trash2 className="w-4 h-4" />
         </button>
@@ -438,6 +530,7 @@ function GroupEditor({ group, onChange, onRemove, suggestingIds, suggestError, o
                   suggestError={suggestError}
                   onSuggestKeywords={onSuggestKeywords}
                   depth={depth + 1}
+                  testResult={testResult?.children?.[i]}
                 />
               </div>
             </div>
@@ -472,7 +565,7 @@ function GroupEditor({ group, onChange, onRemove, suggestingIds, suggestError, o
 }
 
 /** Despacha entre LeafEditor y GroupEditor según el tipo de nodo. */
-function CriterionNode({ node, onChange, onRemove, suggestingIds, suggestError, onSuggestKeywords, depth }) {
+function CriterionNode({ node, onChange, onRemove, suggestingIds, suggestError, onSuggestKeywords, depth, testResult }) {
   if (node.type === 'group') {
     return (
       <GroupEditor
@@ -483,6 +576,7 @@ function CriterionNode({ node, onChange, onRemove, suggestingIds, suggestError, 
         suggestError={suggestError}
         onSuggestKeywords={onSuggestKeywords}
         depth={depth}
+        testResult={testResult}
       />
     );
   }
@@ -494,13 +588,15 @@ function CriterionNode({ node, onChange, onRemove, suggestingIds, suggestError, 
       suggestingIds={suggestingIds}
       suggestError={suggestError}
       onSuggestKeywords={onSuggestKeywords}
+      testResult={testResult}
     />
   );
 }
 
-function CriteriaEditor({ title, criteria, onChange }) {
+function CriteriaEditor({ title, criteria, onChange, testResults }) {
   const [suggestingIds, setSuggestingIds] = useState(() => new Set());
   const [suggestError, setSuggestError] = useState(null);
+  const [viewMode, setViewMode] = useState('tree');
 
   function updateAt(index, updatedNode) {
     onChange(criteria.map((c, i) => (i === index ? updatedNode : c)));
@@ -547,59 +643,266 @@ function CriteriaEditor({ title, criteria, onChange }) {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-2">
-        <p className="text-sm font-semibold text-slate-700">{title}</p>
-        <div className="flex items-center gap-3">
-          <button
-            onClick={addCriterion}
-            className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700"
-          >
-            <Plus className="w-3.5 h-3.5" /> Agregar criterio
-          </button>
-          <button
-            onClick={addCustomCriterion}
-            className="inline-flex items-center gap-1 text-xs font-medium text-purple-600 hover:text-purple-700"
-          >
-            <Sparkles className="w-3.5 h-3.5" /> Criterio personalizado
-          </button>
-          <button
-            onClick={addGroup}
-            className="inline-flex items-center gap-1 text-xs font-medium text-slate-600 hover:text-slate-700"
-          >
-            <Plus className="w-3.5 h-3.5" /> Agregar grupo (O / Y)
-          </button>
-        </div>
-      </div>
-      {criteria.length === 0 && (
-        <p className="text-xs text-slate-400 italic mb-2">Sin criterios definidos.</p>
-      )}
-      <div>
-        {criteria.map((node, i) => (
-          <div key={node.id}>
-            {i > 0 && <LogicConnector operator="AND" />}
-            <div className="py-1">
-              <CriterionNode
-                node={node}
-                onChange={(updated) => updateAt(i, updated)}
-                onRemove={() => removeAt(i)}
-                suggestingIds={suggestingIds}
-                suggestError={suggestError}
-                onSuggestKeywords={handleSuggestKeywords}
-                depth={0}
-              />
-            </div>
+      <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+        <div className="flex items-center gap-2">
+          <p className="text-sm font-semibold text-slate-700">{title}</p>
+          <div className="inline-flex rounded-md border border-slate-300 overflow-hidden text-[11px] font-medium">
+            <button
+              onClick={() => setViewMode('tree')}
+              title="Ver como árbol editable"
+              className={`px-2 py-1 inline-flex items-center gap-1 transition-colors ${
+                viewMode === 'tree' ? 'bg-slate-700 text-white' : 'bg-white text-slate-500 hover:bg-slate-50'
+              }`}
+            >
+              <GitBranch className="w-3 h-3" /> Árbol
+            </button>
+            <button
+              onClick={() => setViewMode('text')}
+              title="Ver como texto para revisar de corrido"
+              className={`px-2 py-1 inline-flex items-center gap-1 transition-colors ${
+                viewMode === 'text' ? 'bg-slate-700 text-white' : 'bg-white text-slate-500 hover:bg-slate-50'
+              }`}
+            >
+              <List className="w-3 h-3" /> Texto
+            </button>
           </div>
-        ))}
+        </div>
+        {viewMode === 'tree' && (
+          <div className="flex items-center gap-3">
+            <button
+              onClick={addCriterion}
+              className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700"
+            >
+              <Plus className="w-3.5 h-3.5" /> Agregar criterio
+            </button>
+            <button
+              onClick={addCustomCriterion}
+              className="inline-flex items-center gap-1 text-xs font-medium text-purple-600 hover:text-purple-700"
+            >
+              <Sparkles className="w-3.5 h-3.5" /> Criterio personalizado
+            </button>
+            <button
+              onClick={addGroup}
+              className="inline-flex items-center gap-1 text-xs font-medium text-slate-600 hover:text-slate-700"
+            >
+              <Plus className="w-3.5 h-3.5" /> Agregar grupo (O / Y)
+            </button>
+          </div>
+        )}
       </div>
+
+      {viewMode === 'text' ? (
+        <CriteriaOutline criteria={criteria} />
+      ) : (
+        <>
+          {criteria.length === 0 && (
+            <p className="text-xs text-slate-400 italic mb-2">Sin criterios definidos.</p>
+          )}
+          <div>
+            {criteria.map((node, i) => (
+              <div key={node.id}>
+                {i > 0 && <LogicConnector operator="AND" />}
+                <div className="py-1">
+                  <CriterionNode
+                    node={node}
+                    onChange={(updated) => updateAt(i, updated)}
+                    onRemove={() => removeAt(i)}
+                    suggestingIds={suggestingIds}
+                    suggestError={suggestError}
+                    onSuggestKeywords={handleSuggestKeywords}
+                    depth={0}
+                    testResult={testResults?.[i]}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }
 
-function ProtocolEditor({ protocol, onSave, onCancel, saving }) {
+/** Cuadro de texto para pegar los criterios del documento original del
+ * estudio y que la IA arme el árbol de criterios automáticamente. El
+ * resultado no se aplica solo: se muestra un resumen y hay que confirmarlo,
+ * porque una redacción ambigua puede interpretarse mal (ver el caso real del
+ * LDL en el protocolo Azure) — la revisión visual en el árbol/texto sigue
+ * siendo necesaria después de generar. */
+function AiGeneratorPanel({ onApply, onClose, hasExistingCriteria }) {
+  const [text, setText] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [pending, setPending] = useState(null);
+
+  async function handleGenerate() {
+    if (!text.trim() || loading) return;
+    setLoading(true);
+    setError(null);
+    setPending(null);
+    try {
+      const result = await parseProtocolCriteria(text);
+      setPending(result);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function handleApply() {
+    onApply(pending);
+    setPending(null);
+    setText('');
+  }
+
+  return (
+    <div className="rounded-lg border border-purple-200 bg-purple-50/60 p-3 space-y-2">
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-semibold text-purple-800 flex items-center gap-1.5">
+          <Sparkles className="w-3.5 h-3.5" /> Generar criterios desde texto con IA
+        </p>
+        <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
+          <X className="w-4 h-4" />
+        </button>
+      </div>
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        rows={7}
+        placeholder="Pega aquí el texto de los criterios de inclusión y exclusión del protocolo, tal como viene en el documento del estudio…"
+        className="w-full text-sm rounded-md border border-slate-300 px-2.5 py-2 bg-white"
+      />
+      <div className="flex items-center gap-2">
+        <button
+          onClick={handleGenerate}
+          disabled={!text.trim() || loading}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-purple-600 text-white text-xs font-medium hover:bg-purple-700 disabled:bg-slate-300 disabled:cursor-not-allowed"
+        >
+          {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+          {loading ? 'Generando…' : 'Generar'}
+        </button>
+        {error && <p className="text-xs text-red-600">{error}</p>}
+      </div>
+      {pending && (
+        <div className="rounded-md border border-purple-300 bg-white p-2.5 space-y-2">
+          <p className="text-xs text-slate-600">
+            Se generaron <strong>{pending.inclusionCriteria.length}</strong> criterio(s) de inclusión y{' '}
+            <strong>{pending.exclusionCriteria.length}</strong> de exclusión
+            {typeof pending.costUsd === 'number' && ` (costo: $${pending.costUsd.toFixed(4)})`}.
+            {hasExistingCriteria && ' Esto reemplazará los criterios que ya tienes en el editor.'}
+          </p>
+          <div className="flex gap-2">
+            <button
+              onClick={handleApply}
+              className="px-3 py-1.5 rounded-md bg-purple-600 text-white text-xs font-medium hover:bg-purple-700"
+            >
+              Aplicar al editor
+            </button>
+            <button
+              onClick={() => setPending(null)}
+              className="px-3 py-1.5 rounded-md text-xs font-medium text-slate-600 hover:bg-slate-100"
+            >
+              Descartar
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Buscador compacto de un paciente real de Base Maestra para probar el
+ * árbol de criterios en vivo mientras se edita — mucho más confiable para
+ * detectar un error de lógica que releer condiciones anidadas, porque el
+ * usuario ya sabe (por su propio criterio clínico) si ese paciente debería o
+ * no calificar. */
+function TestPatientPicker({ patients, testPatientId, onSelect }) {
+  const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(false);
+
+  const selected = (patients || []).find((p) => p.id === testPatientId);
+
+  const matches = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (q.length < 2) return [];
+    return (patients || [])
+      .filter((p) => (p.name || '').toLowerCase().includes(q) || (p.identification || '').includes(q))
+      .slice(0, 8);
+  }, [patients, query]);
+
+  if (selected) {
+    return (
+      <div className="inline-flex items-center gap-2 text-xs bg-white border border-slate-300 rounded-full pl-3 pr-1.5 py-1">
+        <Search className="w-3 h-3 text-slate-400" />
+        <span className="font-medium text-slate-700">Probando con: {selected.name}</span>
+        <button onClick={() => onSelect(null)} className="text-slate-400 hover:text-red-500">
+          <X className="w-3.5 h-3.5" />
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="relative">
+      <div className="relative">
+        <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+        <input
+          value={query}
+          onChange={(e) => {
+            setQuery(e.target.value);
+            setOpen(true);
+          }}
+          onFocus={() => setOpen(true)}
+          onBlur={() => setTimeout(() => setOpen(false), 150)}
+          placeholder="Probar con un paciente de Base Maestra…"
+          className="text-xs rounded-full border border-slate-300 pl-8 pr-3 py-1.5 w-64 bg-white"
+        />
+      </div>
+      {open && matches.length > 0 && (
+        <div className="absolute z-10 mt-1 w-72 bg-white border border-slate-200 rounded-md shadow-lg max-h-56 overflow-y-auto">
+          {matches.map((p) => (
+            <button
+              key={p.id}
+              onMouseDown={() => {
+                onSelect(p.id);
+                setQuery('');
+                setOpen(false);
+              }}
+              className="block w-full text-left px-3 py-1.5 text-xs hover:bg-slate-50"
+            >
+              {p.name} <span className="text-slate-400">· {p.identification}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ProtocolEditor({ protocol, patients, onSave, onCancel, saving }) {
   const [name, setName] = useState(protocol?.name || '');
   const [description, setDescription] = useState(protocol?.description || '');
   const [inclusionCriteria, setInclusionCriteria] = useState(protocol?.inclusionCriteria || []);
   const [exclusionCriteria, setExclusionCriteria] = useState(protocol?.exclusionCriteria || []);
+  const [showGenerator, setShowGenerator] = useState(false);
+  const [testPatientId, setTestPatientId] = useState(null);
+
+  const testPatient = useMemo(
+    () => (testPatientId ? (patients || []).find((p) => p.id === testPatientId) : null),
+    [patients, testPatientId]
+  );
+
+  const testResult = useMemo(() => {
+    if (!testPatient) return null;
+    return evaluatePatientForProtocol(testPatient, { inclusionCriteria, exclusionCriteria });
+  }, [testPatient, inclusionCriteria, exclusionCriteria]);
+
+  function handleApplyGenerated({ inclusionCriteria: inc, exclusionCriteria: exc }) {
+    setInclusionCriteria(assignIdsRecursive(inc));
+    setExclusionCriteria(assignIdsRecursive(exc));
+    setShowGenerator(false);
+  }
 
   function handleSave() {
     if (!name.trim()) return;
@@ -612,15 +915,27 @@ function ProtocolEditor({ protocol, onSave, onCancel, saving }) {
     });
   }
 
+  const hasExistingCriteria = inclusionCriteria.length > 0 || exclusionCriteria.length > 0;
+
   return (
     <div className="bg-white rounded-xl border-2 border-blue-200 p-5 shadow-sm space-y-4">
       <div className="flex items-center justify-between">
         <h3 className="font-semibold text-slate-800">
           {protocol ? 'Editar protocolo' : 'Nuevo protocolo'}
         </h3>
-        <button onClick={onCancel} className="text-slate-400 hover:text-slate-600">
-          <X className="w-5 h-5" />
-        </button>
+        <div className="flex items-center gap-3">
+          {!showGenerator && (
+            <button
+              onClick={() => setShowGenerator(true)}
+              className="inline-flex items-center gap-1.5 text-xs font-medium text-purple-600 hover:text-purple-700"
+            >
+              <Sparkles className="w-3.5 h-3.5" /> Generar con IA desde texto
+            </button>
+          )}
+          <button onClick={onCancel} className="text-slate-400 hover:text-slate-600">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -644,15 +959,44 @@ function ProtocolEditor({ protocol, onSave, onCancel, saving }) {
         </div>
       </div>
 
+      {showGenerator && (
+        <AiGeneratorPanel
+          onApply={handleApplyGenerated}
+          onClose={() => setShowGenerator(false)}
+          hasExistingCriteria={hasExistingCriteria}
+        />
+      )}
+
+      <div className="flex flex-wrap items-center gap-2 pt-1">
+        <TestPatientPicker patients={patients} testPatientId={testPatientId} onSelect={setTestPatientId} />
+        {testPatient && testResult && (
+          testResult.excluded ? (
+            <span className="px-2 py-1 rounded-full bg-slate-200 text-slate-700 text-xs font-medium">
+              Excluido globalmente: {testResult.exclusionReason}
+            </span>
+          ) : (
+            <span
+              className={`px-2 py-1 rounded-full text-xs font-medium ${
+                testResult.apto ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+              }`}
+            >
+              {testResult.apto ? '✔ Apto' : '✘ No apto'}
+            </span>
+          )
+        )}
+      </div>
+
       <CriteriaEditor
         title="Criterios de inclusión"
         criteria={inclusionCriteria}
         onChange={setInclusionCriteria}
+        testResults={testResult && !testResult.excluded ? testResult.inclusionResults : undefined}
       />
       <CriteriaEditor
         title="Criterios de exclusión"
         criteria={exclusionCriteria}
         onChange={setExclusionCriteria}
+        testResults={testResult && !testResult.excluded ? testResult.exclusionResults : undefined}
       />
 
       <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
@@ -675,7 +1019,7 @@ function ProtocolEditor({ protocol, onSave, onCancel, saving }) {
   );
 }
 
-export default function Protocolos({ protocols, onSaveProtocol, onDeleteProtocol }) {
+export default function Protocolos({ protocols, patients, onSaveProtocol, onDeleteProtocol }) {
   const [editingId, setEditingId] = useState(null);
   const [creating, setCreating] = useState(false);
   const [pendingDeleteId, setPendingDeleteId] = useState(null);
@@ -720,7 +1064,7 @@ export default function Protocolos({ protocols, onSaveProtocol, onDeleteProtocol
       </div>
 
       {creating && (
-        <ProtocolEditor onSave={handleSave} onCancel={() => setCreating(false)} saving={saving} />
+        <ProtocolEditor patients={patients} onSave={handleSave} onCancel={() => setCreating(false)} saving={saving} />
       )}
 
       <div className="space-y-3">
@@ -729,6 +1073,7 @@ export default function Protocolos({ protocols, onSaveProtocol, onDeleteProtocol
             <ProtocolEditor
               key={protocol.id}
               protocol={protocol}
+              patients={patients}
               onSave={handleSave}
               onCancel={() => setEditingId(null)}
               saving={saving}

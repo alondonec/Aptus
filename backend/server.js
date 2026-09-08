@@ -439,6 +439,134 @@ app.post('/suggest-keywords', async (req, res) => {
   }
 });
 
+// Convierte el texto libre de un protocolo (criterios de inclusión/exclusión,
+// pegados tal cual del documento del estudio) en el árbol de criterios que
+// entiende Aptus (hojas + grupos AND/OR anidados). Le enseña al modelo el
+// esquema exacto y, sobre todo, la convención de "revisar manualmente": si el
+// criterio depende de un dato que Aptus no extrae de las historias (dosis de
+// medicamentos, tabaquismo, TFG/eGFR, LDL u otro lab puntual), debe devolver
+// un criterio personalizado con keywords vacío y la etiqueta terminada en
+// "(revisar manualmente)" — así el criterio queda visible en el árbol pero no
+// bloquea a todos los pacientes por falta de un dato que nunca vamos a tener.
+const PROTOCOL_PARSE_PROMPT = (text) => `Eres un asistente que convierte los criterios de inclusión y exclusión
+de un protocolo de investigación clínica (texto libre, tal como viene en el documento del estudio) en un árbol
+de criterios estructurado en JSON, para la herramienta Aptus.
+
+CAMPOS ESTRUCTURADOS DISPONIBLES (con datos reales extraídos de las historias clínicas) — usa el campo "field"
+con uno de estos valores cuando el criterio se refiera exactamente a esto:
+- Booleanos (operator "true" = debe estar presente, "false" = debe estar ausente): hta, dm2, erc, icc, fa,
+  eventoCV (evento cardiovascular previo), dementia
+- Numéricos (operator uno de "<", "<=", ">", ">=", con "value" numérico): edad, imc, uacr, fevi
+
+CUALQUIER OTRA condición (un diagnóstico específico, un antecedente, un procedimiento) que NO sea uno de los
+campos de arriba pero que SÍ se pueda buscar como texto en los diagnósticos de la historia clínica: usa
+field:"custom", operator:"true", un "label" descriptivo, y "keywords" con 4-10 variantes en español (con y sin
+tilde, sinónimos clínicos, abreviaturas) que probablemente aparezcan en el texto libre de diagnósticos.
+
+CRITERIOS QUE APTUS NO PUEDE EVALUAR AUTOMÁTICAMENTE porque dependen de un dato que NUNCA se extrae de las
+historias clínicas — dosis o combinación de medicamentos, duración de un tratamiento, tabaquismo/hábito
+tabáquico, o un valor de laboratorio puntual distinto a los numéricos de arriba (TFG/eGFR, LDL, HbA1c, etc.):
+usa igual field:"custom", operator:"true", pero deja "keywords" como un arreglo VACÍO [] y termina el "label"
+con " (revisar manualmente)". Esto dice claramente que el criterio existe pero requiere que un humano lo
+confirme — nunca inventes keywords para intentar adivinar esto desde el texto de diagnósticos.
+
+LÓGICA Y AGRUPACIÓN: el texto suele describir "al menos uno de" / "cualquiera de" / opciones con letras
+(A, B, C) — eso es un grupo {"type":"group","logicalOperator":"OR","label":"...","children":[...]}. Una lista
+numerada secuencial o condiciones unidas con "y" es AND: o bien varios elementos sueltos en el arreglo del
+nivel donde estés (el arreglo siempre se evalúa como AND), o un grupo explícito
+{"type":"group","logicalOperator":"AND","label":"...","children":[...]} si necesitas anidarlo dentro de un OR.
+Los grupos pueden anidarse a cualquier profundidad.
+
+Cada hoja necesita: {"field", "operator", "value" (solo si es numérico), "label", "keywords" (solo si
+field:"custom")}. No incluyas "id" en ningún nodo — Aptus se lo asigna después.
+
+Ejemplo de un criterio real ya resuelto así (para que veas el patrón completo, incluyendo el caso de "revisar
+manualmente" anidado dentro de un OR dentro de un AND dentro de un OR):
+Texto: "Edad ≥ 18. Al menos uno de: (a) Evento cardiovascular, (b) Enfermedad coronaria intervenida, (c) DM2 con
+complicaciones y que tenga más de 65 años, o tabaquismo activo, o TFG menor a 45."
+JSON:
+[
+  {"field":"edad","operator":">=","value":18,"label":"Edad"},
+  {"type":"group","logicalOperator":"OR","label":"Al menos uno de","children":[
+    {"field":"custom","operator":"true","label":"Evento cardiovascular","keywords":["infarto","infarto agudo de miocardio","iam","acv","accidente cerebrovascular","sindrome coronario agudo"]},
+    {"field":"custom","operator":"true","label":"Enfermedad coronaria intervenida","keywords":["angioplastia","stent coronario","bypass coronario","revascularización coronaria","enfermedad coronaria multivaso"]},
+    {"type":"group","logicalOperator":"AND","label":"DM2 con complicaciones y...","children":[
+      {"field":"custom","operator":"true","label":"Diabetes mellitus tipo 2 con complicaciones","keywords":["nefropatía diabética","retinopatía diabética","neuropatía diabética"]},
+      {"type":"group","logicalOperator":"OR","label":"Edad > 65, o tabaquismo activo, o TFG < 45","children":[
+        {"field":"edad","operator":">","value":65,"label":"Edad"},
+        {"field":"custom","operator":"true","label":"Tabaquismo activo (revisar manualmente)","keywords":[]},
+        {"field":"custom","operator":"true","label":"TFG < 45 (revisar manualmente)","keywords":[]}
+      ]}
+    ]}
+  ]}
+]
+
+Ahora convierte este texto (que puede incluir tanto criterios de inclusión como de exclusión, normalmente bajo
+encabezados como "Criterios de inclusión" / "Criterios de exclusión" — si no hay una sección de exclusión
+clara, deja ese arreglo vacío):
+
+"""
+${text}
+"""
+
+Devuelve ÚNICAMENTE este JSON, sin texto adicional: {"inclusionCriteria": [...], "exclusionCriteria": [...]}`;
+
+async function parseProtocolCriteriaFromText(text) {
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': ANTHROPIC_API_KEY,
+      'anthropic-version': ANTHROPIC_VERSION,
+    },
+    body: JSON.stringify({
+      model: MODEL,
+      max_tokens: 4096,
+      messages: [{ role: 'user', content: PROTOCOL_PARSE_PROMPT(text) }],
+    }),
+  });
+
+  const data = await response.json();
+  if (!response.ok) {
+    const message = data?.error?.message || `Messages API respondió con estado ${response.status}`;
+    throw new Error(message);
+  }
+
+  const textBlock = (data.content || []).find((block) => block.type === 'text');
+  if (!textBlock) {
+    throw new Error('La respuesta del modelo no contiene texto');
+  }
+
+  const parsed = extractJSON(textBlock.text, '{', '}');
+  return {
+    inclusionCriteria: Array.isArray(parsed.inclusionCriteria) ? parsed.inclusionCriteria : [],
+    exclusionCriteria: Array.isArray(parsed.exclusionCriteria) ? parsed.exclusionCriteria : [],
+    usage: data.usage || null,
+  };
+}
+
+app.post('/parse-protocol-criteria', async (req, res) => {
+  try {
+    if (!ANTHROPIC_API_KEY) {
+      throw new Error('ANTHROPIC_API_KEY no está configurada en el servidor');
+    }
+    const text = req.body?.text?.trim();
+    if (!text) {
+      throw new Error('Se requiere el texto de los criterios');
+    }
+
+    const { inclusionCriteria, exclusionCriteria, usage } = await parseProtocolCriteriaFromText(text);
+    const costUsd =
+      (usage?.input_tokens || 0) * INPUT_PRICE_PER_TOKEN + (usage?.output_tokens || 0) * OUTPUT_PRICE_PER_TOKEN;
+
+    res.json({ success: true, inclusionCriteria, exclusionCriteria, costUsd });
+  } catch (err) {
+    const message = translateAnthropicError(err.message);
+    console.error('Error en /parse-protocol-criteria:', err.message);
+    res.status(500).json({ success: false, error: message || 'No se pudo interpretar el texto del protocolo' });
+  }
+});
+
 // Precio del caché de prompts (multiplicadores sobre el precio base de
 // entrada), para poder reportar el costo real de cada pregunta. La primera
 // pregunta de una sesión "escribe" el caché (más cara), las siguientes leen

@@ -42,6 +42,14 @@ export async function suggestKeywords(criterionName) {
   return data.keywords;
 }
 
+export async function parseProtocolCriteria(text) {
+  const data = await request('/parse-protocol-criteria', {
+    method: 'POST',
+    body: JSON.stringify({ text }),
+  });
+  return { inclusionCriteria: data.inclusionCriteria, exclusionCriteria: data.exclusionCriteria, costUsd: data.costUsd };
+}
+
 // ---- Asistente de preguntas (IA) ----
 
 export async function askAboutData(question, patients) {

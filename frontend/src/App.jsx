@@ -548,6 +548,7 @@ export default function App() {
             {activeTab === 'protocolos' && (
               <Protocolos
                 protocols={protocols}
+                patients={patients}
                 onSaveProtocol={handleSaveProtocol}
                 onDeleteProtocol={handleDeleteProtocol}
               />
