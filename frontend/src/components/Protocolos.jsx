@@ -110,12 +110,36 @@ function formatCriterionLabel(c) {
   return `${c.label} ${c.operator === 'true' ? '= sí' : c.operator === 'false' ? '= no' : `${c.operator} ${c.value}`}`;
 }
 
+// Un grupo puede ser OR ("al menos uno"), AND ("todos") o AT_LEAST ("al menos
+// N de" — con `minCount`), para criterios del tipo "dos o más de los siguientes
+// factores", que con solo O/Y obligaban a listar todas las combinaciones.
+// Cada tipo tiene su propio color/símbolo, usados por el editor y la vista de
+// texto para que se reconozcan a simple vista.
+const GROUP_THEMES = {
+  OR: { accent: 'border-purple-400', headerBg: 'bg-purple-50', text: 'text-purple-700', chip: 'bg-purple-100 text-purple-700', symbol: 'O' },
+  AND: { accent: 'border-blue-400', headerBg: 'bg-blue-50', text: 'text-blue-700', chip: 'bg-blue-100 text-blue-700', symbol: 'Y' },
+  AT_LEAST: { accent: 'border-teal-400', headerBg: 'bg-teal-50', text: 'text-teal-700', chip: 'bg-teal-100 text-teal-700', symbol: '+' },
+};
+
+function getGroupTheme(operator) {
+  return GROUP_THEMES[operator] || GROUP_THEMES.AND;
+}
+
 /** Versión recursiva de formatCriterionLabel: para un grupo, describe su
  * operador lógico y encierra la descripción de cada hijo (hoja o subgrupo). */
 function formatNodeLabel(node) {
   if (node?.type === 'group') {
-    const joiner = node.logicalOperator === 'OR' ? ' O ' : ' Y ';
-    const title = node.label?.trim() ? `${node.label}: ` : node.logicalOperator === 'OR' ? 'Al menos uno de: ' : 'Todos: ';
+    const op = node.logicalOperator;
+    const joiner = op === 'OR' ? ' O ' : op === 'AT_LEAST' ? ' · ' : ' Y ';
+    const label = node.label?.trim();
+    const title =
+      op === 'AT_LEAST'
+        ? `${label || 'Factores'} [al menos ${node.minCount ?? 1} de ${(node.children || []).length}]: `
+        : label
+          ? `${label}: `
+          : op === 'OR'
+            ? 'Al menos uno de: '
+            : 'Todos: ';
     const inner = (node.children || []).map(formatNodeLabel).join(joiner);
     return `${title}(${inner || 'vacío'})`;
   }
@@ -179,11 +203,16 @@ function describeLeafForOutline(c) {
  * en vez de tener que reconstruir la lógica leyendo cajas y flechas. */
 function CriteriaOutlineNode({ node }) {
   if (node?.type === 'group') {
-    const isOr = node.logicalOperator === 'OR';
-    const title = node.label?.trim() || (isOr ? 'Al menos uno de' : 'Todos los siguientes');
+    const op = node.logicalOperator;
+    const theme = getGroupTheme(op);
+    const label = node.label?.trim();
+    const title =
+      op === 'AT_LEAST'
+        ? `${label ? `${label} — ` : ''}al menos ${node.minCount ?? 1} de los siguientes`
+        : label || (op === 'OR' ? 'Al menos uno de' : 'Todos los siguientes');
     return (
       <li>
-        <span className={`font-medium ${isOr ? 'text-purple-700' : 'text-blue-700'}`}>{title}:</span>
+        <span className={`font-medium ${theme.text}`}>{title}:</span>
         <ol className="list-[lower-alpha] ml-5 mt-0.5 space-y-1">
           {(node.children || []).map((child) => (
             <CriteriaOutlineNode key={child.id} node={child} />
@@ -403,29 +432,26 @@ function LeafEditor({ criterion: c, onChange, onRemove, suggestingIds, suggestEr
  * solo control de dos letras en vez de dos botones con texto largo, para que
  * el ojo lo lea como un símbolo, no como una frase más que leer. */
 function LogicToggle({ value, onChange }) {
-  const isOr = value === 'OR';
+  const options = [
+    { op: 'OR', label: 'O', width: 'w-7', title: 'Al menos uno de sus hijos debe cumplirse', on: 'bg-purple-600 text-white' },
+    { op: 'AND', label: 'Y', width: 'w-7', title: 'Todos sus hijos deben cumplirse', on: 'bg-blue-600 text-white' },
+    { op: 'AT_LEAST', label: '≥N', width: 'w-9', title: 'Al menos N de sus hijos deben cumplirse (tú eliges N)', on: 'bg-teal-600 text-white' },
+  ];
   return (
     <div className="inline-flex rounded-full border border-slate-300 overflow-hidden text-xs font-bold shrink-0">
-      <button
-        type="button"
-        onClick={() => onChange('OR')}
-        title="Al menos uno de sus hijos debe cumplirse"
-        className={`w-7 h-7 flex items-center justify-center transition-colors ${
-          isOr ? 'bg-purple-600 text-white' : 'bg-white text-slate-400 hover:bg-slate-50'
-        }`}
-      >
-        O
-      </button>
-      <button
-        type="button"
-        onClick={() => onChange('AND')}
-        title="Todos sus hijos deben cumplirse"
-        className={`w-7 h-7 flex items-center justify-center transition-colors ${
-          !isOr ? 'bg-blue-600 text-white' : 'bg-white text-slate-400 hover:bg-slate-50'
-        }`}
-      >
-        Y
-      </button>
+      {options.map((o) => (
+        <button
+          key={o.op}
+          type="button"
+          onClick={() => onChange(o.op)}
+          title={o.title}
+          className={`${o.width} h-7 flex items-center justify-center transition-colors ${
+            value === o.op ? o.on : 'bg-white text-slate-400 hover:bg-slate-50'
+          }`}
+        >
+          {o.label}
+        </button>
+      ))}
     </div>
   );
 }
@@ -435,17 +461,11 @@ function LogicToggle({ value, onChange }) {
  * ("condición A" → O → "condición B") en vez de tener que subir la vista al
  * encabezado del grupo para recordar qué operador aplica. */
 function LogicConnector({ operator }) {
-  const isOr = operator === 'OR';
+  const theme = getGroupTheme(operator);
   return (
     <div className="flex items-center gap-2 py-0.5" aria-hidden="true">
       <div className="flex-1 border-t border-dashed border-slate-300" />
-      <span
-        className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-          isOr ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'
-        }`}
-      >
-        {isOr ? 'O' : 'Y'}
-      </span>
+      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${theme.chip}`}>{theme.symbol}</span>
       <div className="flex-1 border-t border-dashed border-slate-300" />
     </div>
   );
@@ -486,9 +506,24 @@ function GroupEditor({ group, onChange, onRemove, suggestingIds, suggestError, o
     onChange({ ...group, children: [...group.children, emptyGroup()] });
   }
 
-  const isOr = group.logicalOperator === 'OR';
-  const accent = isOr ? 'border-purple-400' : 'border-blue-400';
-  const headerBg = isOr ? 'bg-purple-50' : 'bg-blue-50';
+  function setOperator(op) {
+    if (op === 'AT_LEAST') {
+      onChange({ ...group, logicalOperator: op, minCount: group.minCount ?? 2 });
+    } else {
+      const { minCount: _unused, ...rest } = group;
+      onChange({ ...rest, logicalOperator: op });
+    }
+  }
+
+  const isAtLeast = group.logicalOperator === 'AT_LEAST';
+  const theme = getGroupTheme(group.logicalOperator);
+  const accent = theme.accent;
+  const headerBg = theme.headerBg;
+  const namePlaceholder = isAtLeast
+    ? 'Nombre del grupo (ej: Factores de riesgo)'
+    : group.logicalOperator === 'OR'
+      ? 'Nombre del grupo (ej: Al menos uno de)'
+      : 'Nombre del grupo (ej: Todos estos)';
 
   return (
     <div className={`border-l-4 ${accent} rounded-sm`}>
@@ -501,11 +536,25 @@ function GroupEditor({ group, onChange, onRemove, suggestingIds, suggestError, o
         >
           {collapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
         </button>
-        <LogicToggle value={group.logicalOperator} onChange={(op) => onChange({ ...group, logicalOperator: op })} />
+        <LogicToggle value={group.logicalOperator} onChange={setOperator} />
+        {isAtLeast && (
+          <span className="inline-flex items-center gap-1 text-[11px] text-slate-600 shrink-0">
+            al menos
+            <input
+              type="number"
+              min={1}
+              max={Math.max(group.children.length, 1)}
+              value={group.minCount ?? 1}
+              onChange={(e) => onChange({ ...group, minCount: Math.max(1, Number(e.target.value) || 1) })}
+              className="w-12 text-xs rounded border border-slate-300 px-1 py-0.5 bg-white"
+            />
+            de {group.children.length}
+          </span>
+        )}
         <input
           value={group.label || ''}
           onChange={(e) => onChange({ ...group, label: e.target.value })}
-          placeholder={isOr ? 'Nombre del grupo (ej: Al menos uno de)' : 'Nombre del grupo (ej: Todos estos)'}
+          placeholder={namePlaceholder}
           className="flex-1 min-w-[140px] text-sm font-medium rounded-md border border-transparent bg-white/70 px-2 py-1 focus:border-slate-300 focus:bg-white"
         />
         <span className="text-[11px] text-slate-400 shrink-0">

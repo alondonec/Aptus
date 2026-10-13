@@ -483,7 +483,12 @@ LÓGICA Y AGRUPACIÓN: el texto suele describir "al menos uno de" / "cualquiera 
 numerada secuencial o condiciones unidas con "y" es AND: o bien varios elementos sueltos en el arreglo del
 nivel donde estés (el arreglo siempre se evalúa como AND), o un grupo explícito
 {"type":"group","logicalOperator":"AND","label":"...","children":[...]} si necesitas anidarlo dentro de un OR.
-Los grupos pueden anidarse a cualquier profundidad.
+Cuando el texto pide "dos o más de los siguientes", "al menos 3 de estos factores" o similar (un número
+mínimo de condiciones de una lista, distinto de "uno" y de "todas"), usa un grupo
+{"type":"group","logicalOperator":"AT_LEAST","minCount":N,"label":"...","children":[...]} con N igual al mínimo
+que pide el texto, y como hijos cada factor de la lista — NUNCA expandas eso en todas las combinaciones
+posibles con OR/AND. Si un factor de la lista combina dos condiciones (ej. "diabetes y además IMC ≥ 30"), ese
+factor es un hijo que a su vez es un grupo AND. Los grupos pueden anidarse a cualquier profundidad.
 
 Cada hoja necesita: {"field", "operator", "value" (solo si es numérico), "label", "keywords" (solo si
 field:"custom")}. No incluyas "id" en ningún nodo — Aptus se lo asigna después.

@@ -118,7 +118,13 @@ export function evaluateCriterion(patient, criterion) {
  * grupo falló, sin tener que abrir un detalle aparte.
  */
 function describeGroupResult(node, childResults, pass) {
-  const opLabel = node.logicalOperator === 'OR' ? 'al menos uno de' : 'todos de';
+  const passedCount = childResults.filter((r) => r.pass).length;
+  const opLabel =
+    node.logicalOperator === 'OR'
+      ? 'al menos uno de'
+      : node.logicalOperator === 'AT_LEAST'
+        ? `al menos ${node.minCount ?? 1} de (${passedCount} de ${childResults.length} cumplen)`
+        : 'todos de';
   const title = node.label?.trim() || `Grupo (${opLabel})`;
   const parts = childResults.map((r) => `${r.pass ? '✔' : '✘'} ${r.reason}`);
   return `${title} [${opLabel}]: ${pass ? 'cumple' : 'no cumple'} (${parts.join(' · ')})`;
@@ -134,9 +140,14 @@ function describeGroupResult(node, childResults, pass) {
 export function evaluateNode(patient, node) {
   if (node.type === 'group') {
     const childResults = (node.children || []).map((child) => evaluateNode(patient, child));
-    const pass = node.logicalOperator === 'OR'
-      ? childResults.some((r) => r.pass)
-      : childResults.every((r) => r.pass);
+    // AT_LEAST ("al menos N de"): se cumple cuando al menos `minCount` hijos
+    // pasan. Un hijo sin dato cuenta como no cumplido, igual que en OR/AND.
+    const pass =
+      node.logicalOperator === 'OR'
+        ? childResults.some((r) => r.pass)
+        : node.logicalOperator === 'AT_LEAST'
+          ? childResults.filter((r) => r.pass).length >= (node.minCount ?? 1)
+          : childResults.every((r) => r.pass);
     return {
       pass,
       isGroup: true,
