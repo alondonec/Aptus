@@ -6,7 +6,32 @@
 const MERGE_FIELDS = [
   'name', 'identification', 'edad', 'fechaNacimiento', 'phone', 'address',
   'imc', 'peso', 'hta', 'dm2', 'erc', 'icc', 'fa', 'uacr', 'fevi', 'eventoCV', 'dementia',
+  'creatinina', 'tfg', 'pas', 'pad', 'hba1c', 'medicamentos', 'fechaUltimoACV', 'fechaUltimoIAM',
 ];
+
+function wordSet(text) {
+  return new Set(
+    String(text)
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '')
+      .split(/[^a-z0-9]+/)
+      .filter((w) => w.length > 2)
+  );
+}
+
+/** Dos textos de diagnósticos casi idénticos (≥ 90 % de palabras en común) son
+ * la misma historia extraída dos veces — por ejemplo al volver a cargar un PDF
+ * para completar los datos nuevos — y no deben concatenarse: eso duplicaría
+ * todo el texto del paciente. */
+function isNearDuplicateText(a, b) {
+  const wordsA = wordSet(a);
+  const wordsB = wordSet(b);
+  if (!wordsA.size || !wordsB.size) return false;
+  let shared = 0;
+  for (const w of wordsA) if (wordsB.has(w)) shared += 1;
+  return shared / (wordsA.size + wordsB.size - shared) >= 0.9;
+}
 
 function countFilledFields(patient) {
   return MERGE_FIELDS.filter(
@@ -33,6 +58,14 @@ export function mergeDuplicatePatients(existing, incoming) {
   const diagnosticsParts = [primary.diagnostics, secondary.diagnostics]
     .filter((d) => d && String(d).trim())
     .filter((d, i, arr) => arr.indexOf(d) === i); // sin duplicar texto idéntico
+  if (diagnosticsParts.length === 2 && isNearDuplicateText(diagnosticsParts[0], diagnosticsParts[1])) {
+    // Misma historia extraída dos veces: se conserva la versión más completa.
+    diagnosticsParts.splice(
+      0,
+      2,
+      wordSet(diagnosticsParts[1]).size > wordSet(diagnosticsParts[0]).size ? diagnosticsParts[1] : diagnosticsParts[0]
+    );
+  }
   merged.diagnostics = diagnosticsParts.length ? diagnosticsParts.join(' ') : null;
 
   merged.fechaIngreso = incoming.fechaIngreso || existing.fechaIngreso;

@@ -53,6 +53,12 @@ export function normalizeExternalPatient(row) {
     fa: parseBooleanValue(findValue(row, ['fa', 'fibrilacion auricular'])),
     uacr: parseNumber(findValue(row, ['uacr'])),
     fevi: parseNumber(findValue(row, ['fevi'])),
+    creatinina: parseNumber(findValue(row, ['creatinina', 'creatinina serica'])),
+    tfg: parseNumber(findValue(row, ['tfg', 'tasa de filtracion glomerular', 'egfr'])),
+    pas: parseNumber(findValue(row, ['pas', 'presion sistolica', 'presion arterial sistolica'])),
+    pad: parseNumber(findValue(row, ['pad', 'presion diastolica', 'presion arterial diastolica'])),
+    hba1c: parseNumber(findValue(row, ['hba1c', 'hemoglobina glicosilada'])),
+    medicamentos: findValue(row, ['medicamentos', 'medicacion', 'tratamiento farmacologico']),
     eventoCV: parseBooleanValue(
       findValue(row, ['eventocv', 'evento cv', 'evento cardiovascular', 'evento cardiovascular previo'])
     ),

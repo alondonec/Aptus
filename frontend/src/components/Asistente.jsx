@@ -52,6 +52,18 @@ export default function Asistente({ patients, protocols, history, onHistoryChang
         fa: resolved.fa,
         imc: p.imc,
         fevi: p.fevi,
+        ...Object.fromEntries(
+          Object.entries({
+            creatinina: p.creatinina,
+            tfg: p.tfg,
+            pas: p.pas,
+            pad: p.pad,
+            hba1c: p.hba1c,
+            medicamentos: p.medicamentos,
+            ultimoACV: p.fechaUltimoACV,
+            ultimoSCA_IAM: p.fechaUltimoIAM,
+          }).filter(([, v]) => v !== null && v !== undefined)
+        ),
         eventoCV: resolved.eventoCV,
         demencia: resolved.dementia,
         diagnosticos: p.diagnostics,

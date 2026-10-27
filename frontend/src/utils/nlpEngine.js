@@ -95,6 +95,25 @@ export function detectKeywordPresence(text, keywords) {
 }
 
 /**
+ * Busca palabras clave dentro de una lista de medicamentos ("losartán 50 mg;
+ * metformina 850 mg"). A diferencia de los diagnósticos, una lista de
+ * medicamentos no trae negaciones ("niega...") — que un fármaco aparezca es
+ * que el paciente lo toma —, así que es una búsqueda literal sin el análisis
+ * de negación. Devuelve true si hay coincidencia, y undefined si no (no es
+ * prueba de que no lo use: la lista puede ser incompleta).
+ * @param {string} text
+ * @param {string[]} keywords
+ * @returns {true | undefined}
+ */
+export function detectKeywordInList(text, keywords) {
+  if (!text || typeof text !== 'string') return undefined;
+  const cleanKeywords = (keywords || []).map(normalizeText).filter(Boolean);
+  if (!cleanKeywords.length) return undefined;
+  const lower = normalizeText(text);
+  return cleanKeywords.some((kw) => lower.includes(kw)) ? true : undefined;
+}
+
+/**
  * Detecta condiciones predefinidas mencionadas en un texto clínico y
  * determina si están negadas o afirmadas según el contexto de la oración.
  * @param {string} text

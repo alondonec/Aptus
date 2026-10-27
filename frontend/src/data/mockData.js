@@ -17,4 +17,12 @@ export const FIELD_DEFS = [
   { key: 'imc', label: 'IMC', type: 'number' },
   { key: 'uacr', label: 'UACR (mg/g)', type: 'number' },
   { key: 'fevi', label: 'FEVI (%)', type: 'number' },
+  { key: 'creatinina', label: 'Creatinina sérica (mg/dL)', type: 'number' },
+  { key: 'tfg', label: 'TFG (mL/min)', type: 'number' },
+  { key: 'pas', label: 'PAS (mmHg)', type: 'number' },
+  { key: 'pad', label: 'PAD (mmHg)', type: 'number' },
+  { key: 'hba1c', label: 'HbA1c (%)', type: 'number' },
+  // Fecha del último evento; el criterio es "ocurrió en los últimos N meses".
+  { key: 'fechaUltimoACV', label: 'Último ACV', type: 'date' },
+  { key: 'fechaUltimoIAM', label: 'Último SCA / infarto', type: 'date' },
 ];

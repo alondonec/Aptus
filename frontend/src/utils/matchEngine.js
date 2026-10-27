@@ -1,4 +1,4 @@
-import { resolvePatientFlags, detectKeywordPresence } from './nlpEngine';
+import { resolvePatientFlags, detectKeywordPresence, detectKeywordInList } from './nlpEngine';
 
 /**
  * Un paciente con Clasificación Final no vacía (sincronizada desde la Matriz
@@ -17,6 +17,58 @@ export function getGlobalExclusion(patient) {
 }
 
 /**
+ * Fecha más tardía posible de una fecha que puede venir incompleta: "2026-03"
+ * → 31-mar-2026 y "2026" → 31-dic-2026. Se usa la más tardía a propósito: si
+ * solo sabemos el año, es más seguro suponer que el evento pudo ser reciente.
+ */
+function latestPossibleDate(text) {
+  const match = String(text).match(/^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?$/);
+  if (!match) return null;
+  const year = Number(match[1]);
+  if (!match[2]) return new Date(year, 11, 31);
+  const month = Number(match[2]) - 1;
+  if (!match[3]) return new Date(year, month + 1, 0);
+  return new Date(year, month, Number(match[3]));
+}
+
+/**
+ * Criterio "el evento ocurrió en los últimos N meses" (operator
+ * 'within_months') sobre la fecha del último ACV o SCA/infarto. La ventana se
+ * cuenta hacia atrás desde hoy, así que el resultado cambia con el tiempo igual
+ * que la edad. Sin evento registrado el criterio simplemente no se cumple;
+ * un evento mencionado sin fecha no se puede decidir y queda para revisión.
+ */
+function evaluateRecentEvent(patient, criterion) {
+  const label = criterion.label;
+  const months = Number(criterion.value);
+  const raw = patient[criterion.field];
+
+  if (raw === null || raw === undefined || raw === '') {
+    return { pass: false, reason: `${label}: sin evento registrado` };
+  }
+  if (raw === 'sin_fecha') {
+    return {
+      pass: false,
+      indeterminate: true,
+      reason: `${label}: evento mencionado sin fecha (revisar manualmente)`,
+    };
+  }
+  const latest = latestPossibleDate(raw);
+  if (!latest) {
+    return { pass: false, indeterminate: true, reason: `${label}: fecha no interpretable (${raw})` };
+  }
+
+  const cutoff = new Date();
+  cutoff.setMonth(cutoff.getMonth() - months);
+  const pass = latest >= cutoff;
+  const approx = String(raw).length < 10 ? ', fecha aproximada' : '';
+  return {
+    pass,
+    reason: `${label}: último evento ${raw}${approx} — ${pass ? 'dentro' : 'fuera'} de los últimos ${months} meses`,
+  };
+}
+
+/**
  * Evalúa un único criterio (inclusión o exclusión) contra un paciente
  * ya resuelto (con flags NLP aplicados). Los criterios personalizados
  * (field === 'custom') se evalúan buscando sus palabras clave en el texto
@@ -27,15 +79,32 @@ export function evaluateCriterion(patient, criterion) {
   let value;
   let fromNLP = false;
 
+  let fromMedications = false;
+
+  if (criterion.operator === 'within_months') {
+    return evaluateRecentEvent(patient, criterion);
+  }
+
   if (criterion.field === 'custom') {
     value = detectKeywordPresence(patient.diagnostics, criterion.keywords);
     fromNLP = value !== undefined;
+    // Los criterios personalizados también se buscan en la lista de
+    // medicamentos (ej. "Uso de IECA o ARA-II"). Si el fármaco está en la
+    // lista, el paciente lo toma aunque los diagnósticos digan otra cosa.
+    if (detectKeywordInList(patient.medicamentos, criterion.keywords)) {
+      value = true;
+      fromMedications = true;
+    }
   } else {
     value = patient[criterion.field];
     fromNLP = Boolean(patient._nlpSource?.[criterion.field]);
   }
 
-  const suffix = fromNLP ? ' (detectado por NLP en diagnósticos)' : '';
+  const suffix = fromMedications
+    ? ' (detectado en medicamentos)'
+    : fromNLP
+      ? ' (detectado por NLP en diagnósticos)'
+      : '';
   const isNumericOperator = ['<', '<=', '>', '>='].includes(criterion.operator);
 
   if (value === null || value === undefined) {

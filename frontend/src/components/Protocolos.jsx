@@ -10,6 +10,10 @@ const BOOLEAN_OPERATORS = [
   { value: 'true', label: 'Debe estar presente' },
   { value: 'false', label: 'Debe estar ausente' },
 ];
+// Campos de fecha (último ACV / SCA-infarto): el único criterio posible es
+// "ocurrió en los últimos N meses", con N en el campo de valor.
+const DATE_OPERATORS = [{ value: 'within_months', label: 'Ocurrió en los últimos (meses)' }];
+
 const NUMERIC_OPERATORS = [
   { value: '<', label: 'Menor que (<)' },
   { value: '<=', label: 'Menor o igual (≤)' },
@@ -28,7 +32,7 @@ const KNOWN_FIELDS = [...FIELD_DEFS, CUSTOM_OPTION];
 // clave en los diagnósticos) y los campos numéricos, que no se pueden expresar
 // con palabras clave (ej. "Edad ≥ 65"). La lista larga de condiciones
 // predeterminadas ya no se ofrece: los criterios se generan con IA desde texto.
-const SELECTABLE_FIELDS = [CUSTOM_OPTION, ...FIELD_DEFS.filter((f) => f.type === 'number')];
+const SELECTABLE_FIELDS = [CUSTOM_OPTION, ...FIELD_DEFS.filter((f) => f.type === 'number' || f.type === 'date')];
 
 // Palabras clave de respaldo preestablecidas para criterios cuantitativos:
 // cuando la historia no trae el valor numérico pero sí menciona estas
@@ -81,6 +85,7 @@ function formatCriterionLabel(c) {
     const state = c.operator === 'true' ? 'presente' : 'ausente';
     return `${name} (personalizado) = ${state}`;
   }
+  if (c.operator === 'within_months') return `${c.label} en los últimos ${c.value} meses`;
   return `${c.label} ${c.operator === 'true' ? '= sí' : c.operator === 'false' ? '= no' : `${c.operator} ${c.value}`}`;
 }
 
@@ -232,7 +237,8 @@ function LeafEditor({ criterion: c, onChange, onRemove, suggestingIds, suggestEr
   // "Demencia" generado por la IA) sigue mostrándose bien: su campo se agrega
   // a las opciones solo para ese criterio.
   const fieldOptions = SELECTABLE_FIELDS.some((f) => f.key === c.field) ? SELECTABLE_FIELDS : [...SELECTABLE_FIELDS, fieldDef];
-  const operators = fieldDef.type === 'number' ? NUMERIC_OPERATORS : BOOLEAN_OPERATORS;
+  const operators =
+    fieldDef.type === 'number' ? NUMERIC_OPERATORS : fieldDef.type === 'date' ? DATE_OPERATORS : BOOLEAN_OPERATORS;
 
   function updateCriterion(patch) {
     onChange({ ...c, ...patch });
@@ -260,8 +266,8 @@ function LeafEditor({ criterion: c, onChange, onRemove, suggestingIds, suggestEr
               updateCriterion({
                 field: nextField.key,
                 label: nextField.label,
-                operator: nextField.type === 'boolean' ? 'true' : '<',
-                value: nextField.type === 'number' ? 0 : undefined,
+                operator: nextField.type === 'boolean' ? 'true' : nextField.type === 'date' ? 'within_months' : '<',
+                value: nextField.type === 'number' ? 0 : nextField.type === 'date' ? 3 : undefined,
                 keywords: nextField.type === 'number' ? defaultKeywords : undefined,
                 keywordsInput: nextField.type === 'number' ? defaultKeywords.join(', ') : undefined,
               });
@@ -288,7 +294,7 @@ function LeafEditor({ criterion: c, onChange, onRemove, suggestingIds, suggestEr
           ))}
         </select>
 
-        {fieldDef.type === 'number' && (
+        {(fieldDef.type === 'number' || fieldDef.type === 'date') && (
           <input
             type="number"
             value={c.value ?? 0}

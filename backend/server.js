@@ -77,8 +77,86 @@ phone, address, imc, peso (kg, number; solo si el IMC no viene explícito pero e
 peso sí aparece en el documento), talla (metros, number, ej. 1.70; solo si el IMC
 no viene explícito pero la talla sí aparece — si el documento la da en centímetros
 conviértela a metros), hta (boolean), dm2 (boolean), erc (boolean), icc (boolean),
-fa (boolean), uacr, fevi, eventoCV (boolean), dementia (boolean), diagnostics}
-Reglas de negación: 'niega HTA' → hta:false | no menciona → null`;
+fa (boolean), uacr, fevi, eventoCV (boolean), dementia (boolean),
+creatinina (number, mg/dL: creatinina sérica del laboratorio más reciente),
+tfg (number, mL/min/1.73m²: tasa de filtración glomerular / eGFR más reciente),
+pas y pad (number, mmHg: presión arterial sistólica y diastólica del registro MÁS
+RECIENTE de signos vitales o control — una sola toma, no promedios ni antecedentes;
+"130/80" es pas 130 y pad 80), hba1c (number, %: hemoglobina glicosilada más reciente),
+medicamentos (string: los medicamentos ACTUALES del paciente tal como figuran en la
+fórmula o el plan, cada uno con su dosis, separados por "; " — usa el nombre del
+principio activo en minúsculas y si solo viene un nombre comercial escribe el
+genérico seguido del comercial entre paréntesis, ej. "losartán (Cozaar) 50 mg c/12h";
+null si el documento no trae ninguna lista de medicamentos),
+fechaUltimoACV (la fecha del evento MÁS RECIENTE de accidente cerebrovascular /
+ictus, isquémico o hemorrágico) y fechaUltimoIAM (la fecha del evento MÁS RECIENTE
+de síndrome coronario agudo o infarto de miocardio): formato "YYYY-MM-DD", o "YYYY-MM"
+o "YYYY" si el documento solo da el mes o el año; "sin_fecha" si el documento
+menciona el evento pero no da ninguna fecha; null si no hay ningún evento de ese tipo,
+diagnostics}
+Reglas de negación: 'niega HTA' → hta:false | no menciona → null
+Para creatinina, tfg, pas, pad, hba1c, medicamentos y las fechas copia SOLO lo que
+el documento dice explícitamente: no calcules la TFG a partir de la creatinina, no
+estimes presión ni fechas, y usa null cuando el dato no aparece. Los números van con
+punto decimal.`;
+
+// Rangos fisiológicamente posibles de los datos clínicos extendidos. Un valor
+// fuera de rango casi siempre es un error de lectura del modelo (ej. "120/80"
+// leído como 12080) y es más seguro guardarlo como null que como dato falso.
+const CLINICAL_RANGES = {
+  creatinina: [0.1, 30],
+  tfg: [1, 200],
+  pas: [50, 300],
+  pad: [20, 200],
+  hba1c: [3, 20],
+};
+const EVENT_DATE_FIELDS = ['fechaUltimoACV', 'fechaUltimoIAM'];
+
+function toNumberOrNull(value) {
+  if (value === null || value === undefined || value === '') return null;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  const match = String(value).replace(',', '.').match(/-?\d+(\.\d+)?/);
+  return match ? Number(match[0]) : null;
+}
+
+/** "YYYY", "YYYY-MM" o "YYYY-MM-DD" válidos (año plausible); "sin_fecha" se
+ * conserva tal cual (el evento existe pero el documento no lo fecha). */
+function normalizeEventDate(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const text = String(value).trim();
+  if (text === 'sin_fecha') return text;
+  const match = text.match(/^(\d{4})(?:-(\d{2})(?:-(\d{2}))?)?$/);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = match[2] ? Number(match[2]) : 1;
+  if (year < 1900 || year > new Date().getFullYear() + 1 || month < 1 || month > 12) return null;
+  return text;
+}
+
+/** Deja los campos clínicos extendidos del paciente extraído en su formato
+ * definitivo (números dentro de rango, medicamentos como un solo texto, fechas
+ * válidas) sin importar cómo los haya escrito el modelo. */
+function normalizeClinicalExtras(patient) {
+  if (!patient || typeof patient !== 'object') return patient;
+  for (const [field, [min, max]] of Object.entries(CLINICAL_RANGES)) {
+    const n = toNumberOrNull(patient[field]);
+    patient[field] = n !== null && n >= min && n <= max ? n : null;
+  }
+  const meds = Array.isArray(patient.medicamentos) ? patient.medicamentos.join('; ') : patient.medicamentos;
+  patient.medicamentos = typeof meds === 'string' && meds.trim() ? meds.trim() : null;
+  for (const field of EVENT_DATE_FIELDS) {
+    patient[field] = normalizeEventDate(patient[field]);
+  }
+  return patient;
+}
+
+/** Entre varias fechas parciales elige la más reciente; "sin_fecha" solo
+ * gana si no hay ninguna fecha real. */
+function pickLatestEventDate(values) {
+  const real = values.filter((v) => v && v !== 'sin_fecha').sort();
+  if (real.length) return real[real.length - 1];
+  return values.includes('sin_fecha') ? 'sin_fecha' : null;
+}
 
 /** Elimina prefijos de tipo de documento (CC-, TI-, CE-, etc.) dejando solo
  * los dígitos, para que la identificación quede en el mismo formato que
@@ -179,6 +257,7 @@ function mergePatientResults(results) {
   const fields = [
     'name', 'identification', 'edad', 'fechaNacimiento', 'phone', 'address',
     'imc', 'peso', 'talla', 'hta', 'dm2', 'erc', 'icc', 'fa', 'uacr', 'fevi', 'eventoCV', 'dementia',
+    'creatinina', 'tfg', 'pas', 'pad', 'hba1c',
   ];
   const merged = {};
   for (const field of fields) {
@@ -195,6 +274,18 @@ function mergePatientResults(results) {
     .map((r) => (Array.isArray(r?.diagnostics) ? r.diagnostics.join(' ') : r?.diagnostics))
     .filter((d) => d && String(d).trim().length > 0);
   merged.diagnostics = diagnosticsParts.length ? diagnosticsParts.join(' ') : null;
+
+  // Medicamentos: la unión de las listas de todas las partes (sin repetir).
+  const medicationItems = results
+    .flatMap((r) => (r?.medicamentos ? String(r.medicamentos).split(';') : []))
+    .map((m) => m.trim())
+    .filter(Boolean);
+  const uniqueMedications = [...new Map(medicationItems.map((m) => [m.toLowerCase(), m])).values()];
+  merged.medicamentos = uniqueMedications.length ? uniqueMedications.join('; ') : null;
+
+  for (const field of EVENT_DATE_FIELDS) {
+    merged[field] = pickLatestEventDate(results.map((r) => r?.[field]));
+  }
   return merged;
 }
 
@@ -293,6 +384,7 @@ async function extractPatientFromFile(fileId) {
   const patient = parsePatientJSON(textBlock.text);
   if (patient && typeof patient === 'object') {
     patient.identification = stripIdPrefix(patient.identification);
+    normalizeClinicalExtras(patient);
   }
   return { patient, usage: data.usage || null };
 }
@@ -444,10 +536,11 @@ app.post('/suggest-keywords', async (req, res) => {
 // entiende Aptus (hojas + grupos AND/OR anidados). Le enseña al modelo el
 // esquema exacto y, sobre todo, la convención de "revisar manualmente": si el
 // criterio depende de un dato que Aptus no extrae de las historias (dosis de
-// medicamentos, tabaquismo, TFG/eGFR, LDL u otro lab puntual), debe devolver
-// un criterio personalizado con keywords vacío y la etiqueta terminada en
-// "(revisar manualmente)" — así el criterio queda visible en el árbol pero no
-// bloquea a todos los pacientes por falta de un dato que nunca vamos a tener.
+// medicamentos, duración de un tratamiento, tabaquismo, LDL u otro lab puntual
+// que no sea de los numéricos de abajo), debe devolver un criterio
+// personalizado con keywords vacío y la etiqueta terminada en "(revisar
+// manualmente)" — así el criterio queda visible en el árbol pero no bloquea a
+// todos los pacientes por falta de un dato que nunca vamos a tener.
 const PROTOCOL_PARSE_PROMPT = (text) => `Eres un asistente que convierte los criterios de inclusión y exclusión
 de un protocolo de investigación clínica (texto libre, tal como viene en el documento del estudio) en un árbol
 de criterios estructurado en JSON, para la herramienta Aptus.
@@ -456,7 +549,21 @@ CAMPOS ESTRUCTURADOS DISPONIBLES (con datos reales extraídos de las historias c
 con uno de estos valores cuando el criterio se refiera exactamente a esto:
 - Booleanos (operator "true" = debe estar presente, "false" = debe estar ausente): hta, dm2, erc, icc, fa,
   eventoCV (evento cardiovascular previo), dementia
-- Numéricos (operator uno de "<", "<=", ">", ">=", con "value" numérico): edad, imc, uacr, fevi
+- Numéricos (operator uno de "<", "<=", ">", ">=", con "value" numérico): edad, imc, uacr (cociente
+  albúmina/creatinina en orina, ALB/CRE, mg/g), fevi (%), creatinina (creatinina sérica, mg/dL), tfg (tasa de
+  filtración glomerular, mL/min), pas (presión arterial sistólica, mmHg), pad (presión arterial diastólica,
+  mmHg), hba1c (hemoglobina glicosilada, %). Un rango "entre A y B" es un grupo AND con dos hojas: el campo >= A
+  y el campo <= B (límites incluidos salvo que el texto diga lo contrario). Una condición como "PAS > 180 o
+  PAD > 110" es un grupo OR con una hoja por campo.
+- Fechas de eventos (operator "within_months", con "value" = número de meses): fechaUltimoACV (accidente
+  cerebrovascular / ictus) y fechaUltimoIAM (síndrome coronario agudo o infarto de miocardio). Úsalos cuando
+  el criterio dice que el evento ocurrió (o NO debe haber ocurrido, si está en exclusión) "en los últimos N
+  meses" (convierte semanas y años a meses). Si el criterio no pone ventana de tiempo, usa en cambio un
+  criterio personalizado con palabras clave.
+- Medicamentos: Aptus extrae la lista de medicamentos actuales de cada paciente y la busca junto con los
+  diagnósticos. Un criterio de "uso de" un medicamento o de una clase (IECA, ARA-II, estatinas, espironolactona,
+  insulina, etc.) es field:"custom", operator:"true", con "keywords" = los nombres genéricos de todos los
+  fármacos de la clase (y los comerciales más comunes) más el nombre de la clase. NO es "revisar manualmente".
 
 CUALQUIER OTRA condición (un diagnóstico específico, un antecedente, un procedimiento) que NO sea uno de los
 campos de arriba pero que SÍ se pueda buscar como texto en los diagnósticos de la historia clínica: usa
@@ -472,8 +579,9 @@ excluir. Usa operator:"false" únicamente cuando el texto pida explícitamente l
 estructurado dentro de inclusionCriteria (ej. "sin antecedente de demencia" como requisito de inclusión).
 
 CRITERIOS QUE APTUS NO PUEDE EVALUAR AUTOMÁTICAMENTE porque dependen de un dato que NUNCA se extrae de las
-historias clínicas — dosis o combinación de medicamentos, duración de un tratamiento, tabaquismo/hábito
-tabáquico, o un valor de laboratorio puntual distinto a los numéricos de arriba (TFG/eGFR, LDL, HbA1c, etc.):
+historias clínicas — la dosis o la duración de un tratamiento con un medicamento, tabaquismo/hábito
+tabáquico, o un valor de laboratorio puntual distinto a los numéricos de arriba (LDL, triglicéridos, potasio,
+etc.):
 usa igual field:"custom", operator:"true", pero deja "keywords" como un arreglo VACÍO [] y termina el "label"
 con " (revisar manualmente)". Esto dice claramente que el criterio existe pero requiere que un humano lo
 confirme — nunca inventes keywords para intentar adivinar esto desde el texto de diagnósticos.
@@ -494,7 +602,7 @@ Cada hoja necesita: {"field", "operator", "value" (solo si es numérico), "label
 field:"custom")}. No incluyas "id" en ningún nodo — Aptus se lo asigna después.
 
 Ejemplo de un criterio real ya resuelto así (para que veas el patrón completo, incluyendo el caso de "revisar
-manualmente" anidado dentro de un OR dentro de un AND dentro de un OR):
+manualmente" anidado dentro de un OR dentro de un AND dentro de un OR, y un criterio numérico de laboratorio):
 Texto: "Edad ≥ 18. Al menos uno de: (a) Evento cardiovascular, (b) Enfermedad coronaria intervenida, (c) DM2 con
 complicaciones y que tenga más de 65 años, o tabaquismo activo, o TFG menor a 45."
 JSON:
@@ -508,7 +616,7 @@ JSON:
       {"type":"group","logicalOperator":"OR","label":"Edad > 65, o tabaquismo activo, o TFG < 45","children":[
         {"field":"edad","operator":">","value":65,"label":"Edad"},
         {"field":"custom","operator":"true","label":"Tabaquismo activo (revisar manualmente)","keywords":[]},
-        {"field":"custom","operator":"true","label":"TFG < 45 (revisar manualmente)","keywords":[]}
+        {"field":"tfg","operator":"<","value":45,"label":"TFG"}
       ]}
     ]}
   ]}

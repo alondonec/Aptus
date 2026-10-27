@@ -104,6 +104,26 @@ if (!existingColumns.has('estadoHistorial')) {
 if (!existingColumns.has('peso')) {
   db.exec('ALTER TABLE patients ADD COLUMN peso REAL;');
 }
+// Laboratorios y signos vitales más recientes (para criterios numéricos como
+// "TFG entre 30 y 60"), medicamentos actuales (texto, para criterios de "uso
+// de IECA/ARA-II") y fecha del último ACV / SCA-infarto (para criterios del
+// tipo "en los últimos 3 meses"). Se llenan al extraer la historia clínica; los
+// pacientes cargados antes de que existieran quedan en NULL hasta que se
+// vuelva a cargar su historia.
+for (const [column, type] of [
+  ['creatinina', 'REAL'],
+  ['tfg', 'REAL'],
+  ['pas', 'REAL'],
+  ['pad', 'REAL'],
+  ['hba1c', 'REAL'],
+  ['medicamentos', 'TEXT'],
+  ['fechaUltimoACV', 'TEXT'],
+  ['fechaUltimoIAM', 'TEXT'],
+]) {
+  if (!existingColumns.has(column)) {
+    db.exec(`ALTER TABLE patients ADD COLUMN ${column} ${type};`);
+  }
+}
 
 // ---- Conversión entre el modelo JS (booleanos true/false/null) y las
 // columnas SQLite (que no tienen tipo boolean nativo, solo INTEGER 0/1/NULL).
@@ -151,6 +171,14 @@ function rowToPatient(row) {
     estadoActualizadoEn: row.estadoActualizadoEn,
     estadoHistorial: JSON.parse(row.estadoHistorial || '[]'),
     peso: row.peso,
+    creatinina: row.creatinina,
+    tfg: row.tfg,
+    pas: row.pas,
+    pad: row.pad,
+    hba1c: row.hba1c,
+    medicamentos: row.medicamentos,
+    fechaUltimoACV: row.fechaUltimoACV,
+    fechaUltimoIAM: row.fechaUltimoIAM,
   };
 }
 
@@ -170,15 +198,19 @@ const stmts = {
   allPatients: db.prepare('SELECT * FROM patients ORDER BY rowid ASC'),
   getPatient: db.prepare('SELECT * FROM patients WHERE id = ?'),
   insertPatient: db.prepare(`
-    INSERT INTO patients (id, name, identification, edad, fechaNacimiento, phone, address, imc, hta, dm2, erc, icc, fa, uacr, fevi, eventoCV, dementia, diagnostics, fechaIngreso, source, peso)
-    VALUES (@id, @name, @identification, @edad, @fechaNacimiento, @phone, @address, @imc, @hta, @dm2, @erc, @icc, @fa, @uacr, @fevi, @eventoCV, @dementia, @diagnostics, @fechaIngreso, @source, @peso)
+    INSERT INTO patients (id, name, identification, edad, fechaNacimiento, phone, address, imc, hta, dm2, erc, icc, fa, uacr, fevi, eventoCV, dementia, diagnostics, fechaIngreso, source, peso,
+      creatinina, tfg, pas, pad, hba1c, medicamentos, fechaUltimoACV, fechaUltimoIAM)
+    VALUES (@id, @name, @identification, @edad, @fechaNacimiento, @phone, @address, @imc, @hta, @dm2, @erc, @icc, @fa, @uacr, @fevi, @eventoCV, @dementia, @diagnostics, @fechaIngreso, @source, @peso,
+      @creatinina, @tfg, @pas, @pad, @hba1c, @medicamentos, @fechaUltimoACV, @fechaUltimoIAM)
   `),
   updatePatient: db.prepare(`
     UPDATE patients SET name=@name, identification=@identification, edad=@edad,
       fechaNacimiento=@fechaNacimiento, phone=@phone, address=@address, imc=@imc,
       hta=@hta, dm2=@dm2, erc=@erc, icc=@icc, fa=@fa, uacr=@uacr, fevi=@fevi,
       eventoCV=@eventoCV, dementia=@dementia, diagnostics=@diagnostics,
-      fechaIngreso=@fechaIngreso, source=@source, peso=@peso
+      fechaIngreso=@fechaIngreso, source=@source, peso=@peso,
+      creatinina=@creatinina, tfg=@tfg, pas=@pas, pad=@pad, hba1c=@hba1c,
+      medicamentos=@medicamentos, fechaUltimoACV=@fechaUltimoACV, fechaUltimoIAM=@fechaUltimoIAM
     WHERE id=@id
   `),
   deletePatient: db.prepare('DELETE FROM patients WHERE id = ?'),
@@ -252,6 +284,14 @@ function patientToParams(id, patient) {
     fechaIngreso: patient.fechaIngreso ?? null,
     source: patient.source ?? null,
     peso: patient.peso ?? null,
+    creatinina: patient.creatinina ?? null,
+    tfg: patient.tfg ?? null,
+    pas: patient.pas ?? null,
+    pad: patient.pad ?? null,
+    hba1c: patient.hba1c ?? null,
+    medicamentos: patient.medicamentos ?? null,
+    fechaUltimoACV: patient.fechaUltimoACV ?? null,
+    fechaUltimoIAM: patient.fechaUltimoIAM ?? null,
   };
 }
 
