@@ -17,37 +17,18 @@ const NUMERIC_OPERATORS = [
   { value: '>=', label: 'Mayor o igual (≥)' },
 ];
 
-// Condiciones sin campo estructurado en el modelo de paciente: se ofrecen
-// como criterios personalizados preestablecidos (con palabras clave ya
-// cargadas) que el motor NLP busca en el texto de diagnósticos, igual que
-// cualquier criterio personalizado creado manualmente.
-const PRESET_CUSTOM_CRITERIA = [
-  {
-    key: 'preset_cancer',
-    label: 'Cáncer',
-    keywords: ['cáncer', 'cancer', 'neoplasia', 'oncológico', 'oncologico', 'tumor maligno', 'carcinoma', 'metástasis', 'metastasis'],
-  },
-  {
-    key: 'preset_dialisis',
-    label: 'Diálisis o hemodiálisis',
-    keywords: ['diálisis', 'dialisis', 'hemodiálisis', 'hemodialisis', 'dialítico', 'dialitico', 'terapia de reemplazo renal'],
-  },
-  {
-    key: 'preset_hepatitis',
-    label: 'Hepatitis Aguda',
-    keywords: ['hepatitis aguda', 'hepatitis viral aguda', 'hepatitis fulminante'],
-  },
-];
+const CUSTOM_OPTION = { key: CUSTOM_FIELD_KEY, label: 'Personalizado (palabras clave)', type: 'custom' };
 
-// Opciones del selector de campo: los campos estructurados predefinidos, las
-// condiciones preestablecidas sin campo estructurado, y la opción de criterio
-// personalizado manual — todas resueltas por el motor NLP a partir de
-// palabras clave buscadas en el texto de diagnósticos.
-const FIELD_OPTIONS = [
-  ...FIELD_DEFS,
-  ...PRESET_CUSTOM_CRITERIA.map((p) => ({ key: p.key, label: p.label, type: 'custom-preset', keywords: p.keywords })),
-  { key: CUSTOM_FIELD_KEY, label: 'Personalizado (definir manualmente)…', type: 'custom' },
-];
+// Todos los campos que el motor de evaluación entiende: sirven para mostrar
+// correctamente cualquier criterio ya guardado (los que genera la IA usan
+// campos estructurados como edad, demencia o DM2 cuando aplica).
+const KNOWN_FIELDS = [...FIELD_DEFS, CUSTOM_OPTION];
+
+// Lo que se ofrece al armar un criterio a mano: "Personalizado" (palabras
+// clave en los diagnósticos) y los campos numéricos, que no se pueden expresar
+// con palabras clave (ej. "Edad ≥ 65"). La lista larga de condiciones
+// predeterminadas ya no se ofrece: los criterios se generan con IA desde texto.
+const SELECTABLE_FIELDS = [CUSTOM_OPTION, ...FIELD_DEFS.filter((f) => f.type === 'number')];
 
 // Palabras clave de respaldo preestablecidas para criterios cuantitativos:
 // cuando la historia no trae el valor numérico pero sí menciona estas
@@ -56,20 +37,6 @@ const FIELD_OPTIONS = [
 const DEFAULT_NUMERIC_KEYWORDS = {
   imc: ['obesidad', 'sobrepeso'],
 };
-
-function emptyCriterion() {
-  const first = FIELD_DEFS[0];
-  const defaultKeywords = DEFAULT_NUMERIC_KEYWORDS[first.key] || [];
-  return {
-    id: `c${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-    field: first.key,
-    operator: first.type === 'boolean' ? 'true' : '<',
-    value: first.type === 'number' ? 0 : undefined,
-    label: first.label,
-    keywords: defaultKeywords,
-    keywordsInput: defaultKeywords.join(', '),
-  };
-}
 
 function emptyCustomCriterion() {
   return {
@@ -253,7 +220,11 @@ function CriteriaOutline({ criteria }) {
  * grupos a cualquier profundidad. */
 function LeafEditor({ criterion: c, onChange, onRemove, suggestingIds, suggestError, onSuggestKeywords, testResult, invert }) {
   const isCustom = c.field === CUSTOM_FIELD_KEY;
-  const fieldDef = FIELD_OPTIONS.find((f) => f.key === c.field) || FIELD_OPTIONS[0];
+  const fieldDef = KNOWN_FIELDS.find((f) => f.key === c.field) || FIELD_DEFS[0];
+  // Un criterio ya guardado con un campo que no se ofrece al armar a mano (ej.
+  // "Demencia" generado por la IA) sigue mostrándose bien: su campo se agrega
+  // a las opciones solo para ese criterio.
+  const fieldOptions = SELECTABLE_FIELDS.some((f) => f.key === c.field) ? SELECTABLE_FIELDS : [...SELECTABLE_FIELDS, fieldDef];
   const operators = fieldDef.type === 'number' ? NUMERIC_OPERATORS : BOOLEAN_OPERATORS;
 
   function updateCriterion(patch) {
@@ -266,7 +237,7 @@ function LeafEditor({ criterion: c, onChange, onRemove, suggestingIds, suggestEr
         <select
           value={c.field}
           onChange={(e) => {
-            const nextField = FIELD_OPTIONS.find((f) => f.key === e.target.value);
+            const nextField = KNOWN_FIELDS.find((f) => f.key === e.target.value);
             if (nextField.key === CUSTOM_FIELD_KEY) {
               updateCriterion({
                 field: CUSTOM_FIELD_KEY,
@@ -275,15 +246,6 @@ function LeafEditor({ criterion: c, onChange, onRemove, suggestingIds, suggestEr
                 value: undefined,
                 keywords: c.keywords || [],
                 keywordsInput: c.keywordsInput || '',
-              });
-            } else if (nextField.type === 'custom-preset') {
-              updateCriterion({
-                field: CUSTOM_FIELD_KEY,
-                label: nextField.label,
-                operator: 'true',
-                value: undefined,
-                keywords: nextField.keywords,
-                keywordsInput: nextField.keywords.join(', '),
               });
             } else {
               const defaultKeywords =
@@ -300,7 +262,7 @@ function LeafEditor({ criterion: c, onChange, onRemove, suggestingIds, suggestEr
           }}
           className="text-sm rounded-md border border-slate-300 px-2 py-1.5 bg-white"
         >
-          {FIELD_OPTIONS.map((f) => (
+          {fieldOptions.map((f) => (
             <option key={f.key} value={f.key}>
               {f.label}
             </option>
@@ -497,9 +459,6 @@ function GroupEditor({ group, onChange, onRemove, suggestingIds, suggestError, o
     onChange({ ...group, children: group.children.filter((_, i) => i !== index) });
   }
   function addLeafChild() {
-    onChange({ ...group, children: [...group.children, emptyCriterion()] });
-  }
-  function addCustomLeafChild() {
     onChange({ ...group, children: [...group.children, emptyCustomCriterion()] });
   }
   function addSubgroup() {
@@ -599,12 +558,6 @@ function GroupEditor({ group, onChange, onRemove, suggestingIds, suggestError, o
             >
               <Plus className="w-3.5 h-3.5" /> Criterio
             </button>
-            <button
-              onClick={addCustomLeafChild}
-              className="inline-flex items-center gap-1 text-xs font-medium text-purple-600 hover:text-purple-700"
-            >
-              <Sparkles className="w-3.5 h-3.5" /> Personalizado
-            </button>
             {depth < 4 && (
               <button
                 onClick={addSubgroup}
@@ -665,10 +618,6 @@ function CriteriaEditor({ title, criteria, onChange, testResults, invert }) {
   }
 
   function addCriterion() {
-    onChange([...criteria, emptyCriterion()]);
-  }
-
-  function addCustomCriterion() {
     onChange([...criteria, emptyCustomCriterion()]);
   }
 
@@ -732,12 +681,6 @@ function CriteriaEditor({ title, criteria, onChange, testResults, invert }) {
               className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:text-blue-700"
             >
               <Plus className="w-3.5 h-3.5" /> Agregar criterio
-            </button>
-            <button
-              onClick={addCustomCriterion}
-              className="inline-flex items-center gap-1 text-xs font-medium text-purple-600 hover:text-purple-700"
-            >
-              <Sparkles className="w-3.5 h-3.5" /> Criterio personalizado
             </button>
             <button
               onClick={addGroup}
