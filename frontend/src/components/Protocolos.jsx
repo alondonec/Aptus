@@ -64,8 +64,15 @@ function emptyGroup() {
   };
 }
 
+// Una coma entre dos dígitos es un decimal en español ("1,4", "10,5%"), no un
+// separador: se protege antes de partir para que no queden palabras sueltas
+// como "4" o "5%", que coinciden con casi cualquier texto.
 function parseKeywords(text) {
-  return text.split(',').map((k) => k.trim()).filter(Boolean);
+  return text
+    .replace(/(\d),(?=\d)/g, '$1')
+    .split(',')
+    .map((k) => k.replace(//g, ',').trim())
+    .filter(Boolean);
 }
 
 function formatCriterionLabel(c) {
