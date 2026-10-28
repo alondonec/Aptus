@@ -75,6 +75,16 @@ function evaluateRecentEvent(patient, criterion) {
  * de diagnósticos mediante el mismo motor NLP de negaciones.
  */
 export function evaluateCriterion(patient, criterion) {
+  const result = evaluateCriterionBase(patient, criterion);
+  // Una TFG calculada por Aptus (no reportada por el laboratorio) lo dice en
+  // el motivo, para que quien revise sepa de dónde salió el número.
+  if (criterion.field === 'tfg' && patient.tfgMetodo && !result.indeterminate) {
+    return { ...result, reason: `${result.reason} [${patient.tfgMetodo}]` };
+  }
+  return result;
+}
+
+function evaluateCriterionBase(patient, criterion) {
   const label = criterion.label;
   let value;
   let fromNLP = false;

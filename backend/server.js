@@ -8,6 +8,7 @@ const FormData = require('form-data');
 const cors = require('cors');
 const { PDFDocument } = require('@cantoo/pdf-lib');
 const db = require('./db');
+const { applyTfgFallback } = require('./renalFunction');
 
 // Evita que un error no controlado (ej. una promesa rechazada que nadie
 // esperó) tumbe todo el servidor — desde Node 15 el comportamiento por
@@ -78,8 +79,17 @@ peso sí aparece en el documento), talla (metros, number, ej. 1.70; solo si el I
 no viene explícito pero la talla sí aparece — si el documento la da en centímetros
 conviértela a metros), hta (boolean), dm2 (boolean), erc (boolean), icc (boolean),
 fa (boolean), uacr, fevi, eventoCV (boolean), dementia (boolean),
-creatinina (number, mg/dL: creatinina sérica del laboratorio más reciente),
-tfg (number, mL/min/1.73m²: tasa de filtración glomerular / eGFR más reciente),
+sexo ("F" o "M": SOLO si el documento lo indica de forma explícita — un campo Sexo/Género
+o "paciente femenina/masculino" —; nunca lo deduzcas por el nombre; null si no aparece),
+creatinina (number, mg/dL), tfg (number, mL/min/1.73m²: tasa de filtración glomerular /
+eGFR), tfgMetodo (string: la fórmula con la que el laboratorio reportó esa TFG, "CKD-EPI",
+"MDRD" o "Cockcroft-Gault"; null si no lo dice o si no hay TFG reportada) y
+fechaFuncionRenal (la fecha de ese examen, en el mismo formato de fechas de abajo).
+creatinina, tfg, tfgMetodo y fechaFuncionRenal salen SIEMPRE del examen de función renal
+MÁS RECIENTE (por fecha) y todos del MISMO examen: ignora los exámenes anteriores. Si el
+examen más reciente trae creatinina pero NO trae TFG, deja tfg en null aunque un examen
+anterior sí la tuviera (Aptus la calcula con la creatinina más reciente). Si ningún
+examen tiene fecha, usa el último que aparezca en el documento,
 pas y pad (number, mmHg: presión arterial sistólica y diastólica del registro MÁS
 RECIENTE de signos vitales o control — una sola toma, no promedios ni antecedentes;
 "130/80" es pas 130 y pad 80), hba1c (number, %: hemoglobina glicosilada más reciente),
@@ -112,6 +122,13 @@ const CLINICAL_RANGES = {
 };
 const EVENT_DATE_FIELDS = ['fechaUltimoACV', 'fechaUltimoIAM'];
 
+function normalizeSexo(value) {
+  const text = String(value ?? '').trim().toLowerCase();
+  if (['f', 'femenino', 'femenina', 'mujer'].includes(text)) return 'F';
+  if (['m', 'masculino', 'hombre', 'varon', 'varón'].includes(text)) return 'M';
+  return null;
+}
+
 function toNumberOrNull(value) {
   if (value === null || value === undefined || value === '') return null;
   if (typeof value === 'number') return Number.isFinite(value) ? value : null;
@@ -142,6 +159,11 @@ function normalizeClinicalExtras(patient) {
     const n = toNumberOrNull(patient[field]);
     patient[field] = n !== null && n >= min && n <= max ? n : null;
   }
+  patient.sexo = normalizeSexo(patient.sexo);
+  patient.fechaFuncionRenal = normalizeEventDate(patient.fechaFuncionRenal);
+  if (patient.fechaFuncionRenal === 'sin_fecha') patient.fechaFuncionRenal = null;
+  const metodo = typeof patient.tfgMetodo === 'string' ? patient.tfgMetodo.trim().slice(0, 40) : '';
+  patient.tfgMetodo = patient.tfg !== null && metodo ? metodo : null;
   const meds = Array.isArray(patient.medicamentos) ? patient.medicamentos.join('; ') : patient.medicamentos;
   patient.medicamentos = typeof meds === 'string' && meds.trim() ? meds.trim() : null;
   for (const field of EVENT_DATE_FIELDS) {
@@ -257,7 +279,7 @@ function mergePatientResults(results) {
   const fields = [
     'name', 'identification', 'edad', 'fechaNacimiento', 'phone', 'address',
     'imc', 'peso', 'talla', 'hta', 'dm2', 'erc', 'icc', 'fa', 'uacr', 'fevi', 'eventoCV', 'dementia',
-    'creatinina', 'tfg', 'pas', 'pad', 'hba1c',
+    'pas', 'pad', 'hba1c', 'sexo',
   ];
   const merged = {};
   for (const field of fields) {
@@ -285,6 +307,17 @@ function mergePatientResults(results) {
 
   for (const field of EVENT_DATE_FIELDS) {
     merged[field] = pickLatestEventDate(results.map((r) => r?.[field]));
+  }
+
+  // Función renal: creatinina, TFG, método y fecha se toman juntos de la parte
+  // con el examen más reciente (no campo por campo), para no mezclar un
+  // examen con otro.
+  const withRenal = results.filter((r) => r && (r.creatinina != null || r.tfg != null));
+  const latestRenal =
+    [...withRenal].sort((a, b) => String(a.fechaFuncionRenal ?? '').localeCompare(String(b.fechaFuncionRenal ?? ''))).pop() ||
+    null;
+  for (const field of ['creatinina', 'tfg', 'tfgMetodo', 'fechaFuncionRenal']) {
+    merged[field] = latestRenal?.[field] ?? null;
   }
   return merged;
 }
@@ -481,7 +514,9 @@ app.post('/extract-pdf', upload.single('file'), async (req, res) => {
 
     const results = await extractPatientWithSplitting(req.file.buffer, req.file.originalname);
     const patients = results.map((r) => r.patient);
-    const patient = applyImcFallback(patients.length > 1 ? mergePatientResults(patients) : patients[0]);
+    const patient = applyTfgFallback(
+      applyImcFallback(patients.length > 1 ? mergePatientResults(patients) : patients[0])
+    );
 
     // Costo real (no estimado): suma los tokens de entrada/salida de todas las
     // llamadas al modelo que hizo falta hacer para esta historia (una sola,

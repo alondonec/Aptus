@@ -55,7 +55,9 @@ export default function Asistente({ patients, protocols, history, onHistoryChang
         ...Object.fromEntries(
           Object.entries({
             creatinina: p.creatinina,
+            sexo: p.sexo,
             tfg: p.tfg,
+            metodoTFG: p.tfgMetodo,
             pas: p.pas,
             pad: p.pad,
             hba1c: p.hba1c,

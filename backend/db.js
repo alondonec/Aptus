@@ -119,6 +119,9 @@ for (const [column, type] of [
   ['medicamentos', 'TEXT'],
   ['fechaUltimoACV', 'TEXT'],
   ['fechaUltimoIAM', 'TEXT'],
+  ['sexo', 'TEXT'],
+  ['tfgMetodo', 'TEXT'],
+  ['fechaFuncionRenal', 'TEXT'],
 ]) {
   if (!existingColumns.has(column)) {
     db.exec(`ALTER TABLE patients ADD COLUMN ${column} ${type};`);
@@ -179,6 +182,9 @@ function rowToPatient(row) {
     medicamentos: row.medicamentos,
     fechaUltimoACV: row.fechaUltimoACV,
     fechaUltimoIAM: row.fechaUltimoIAM,
+    sexo: row.sexo,
+    tfgMetodo: row.tfgMetodo,
+    fechaFuncionRenal: row.fechaFuncionRenal,
   };
 }
 
@@ -199,9 +205,11 @@ const stmts = {
   getPatient: db.prepare('SELECT * FROM patients WHERE id = ?'),
   insertPatient: db.prepare(`
     INSERT INTO patients (id, name, identification, edad, fechaNacimiento, phone, address, imc, hta, dm2, erc, icc, fa, uacr, fevi, eventoCV, dementia, diagnostics, fechaIngreso, source, peso,
-      creatinina, tfg, pas, pad, hba1c, medicamentos, fechaUltimoACV, fechaUltimoIAM)
+      creatinina, tfg, pas, pad, hba1c, medicamentos, fechaUltimoACV, fechaUltimoIAM,
+      sexo, tfgMetodo, fechaFuncionRenal)
     VALUES (@id, @name, @identification, @edad, @fechaNacimiento, @phone, @address, @imc, @hta, @dm2, @erc, @icc, @fa, @uacr, @fevi, @eventoCV, @dementia, @diagnostics, @fechaIngreso, @source, @peso,
-      @creatinina, @tfg, @pas, @pad, @hba1c, @medicamentos, @fechaUltimoACV, @fechaUltimoIAM)
+      @creatinina, @tfg, @pas, @pad, @hba1c, @medicamentos, @fechaUltimoACV, @fechaUltimoIAM,
+      @sexo, @tfgMetodo, @fechaFuncionRenal)
   `),
   updatePatient: db.prepare(`
     UPDATE patients SET name=@name, identification=@identification, edad=@edad,
@@ -210,7 +218,8 @@ const stmts = {
       eventoCV=@eventoCV, dementia=@dementia, diagnostics=@diagnostics,
       fechaIngreso=@fechaIngreso, source=@source, peso=@peso,
       creatinina=@creatinina, tfg=@tfg, pas=@pas, pad=@pad, hba1c=@hba1c,
-      medicamentos=@medicamentos, fechaUltimoACV=@fechaUltimoACV, fechaUltimoIAM=@fechaUltimoIAM
+      medicamentos=@medicamentos, fechaUltimoACV=@fechaUltimoACV, fechaUltimoIAM=@fechaUltimoIAM,
+      sexo=@sexo, tfgMetodo=@tfgMetodo, fechaFuncionRenal=@fechaFuncionRenal
     WHERE id=@id
   `),
   deletePatient: db.prepare('DELETE FROM patients WHERE id = ?'),
@@ -292,6 +301,9 @@ function patientToParams(id, patient) {
     medicamentos: patient.medicamentos ?? null,
     fechaUltimoACV: patient.fechaUltimoACV ?? null,
     fechaUltimoIAM: patient.fechaUltimoIAM ?? null,
+    sexo: patient.sexo ?? null,
+    tfgMetodo: patient.tfgMetodo ?? null,
+    fechaFuncionRenal: patient.fechaFuncionRenal ?? null,
   };
 }
 

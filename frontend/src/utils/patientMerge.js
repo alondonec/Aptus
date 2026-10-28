@@ -7,6 +7,7 @@ const MERGE_FIELDS = [
   'name', 'identification', 'edad', 'fechaNacimiento', 'phone', 'address',
   'imc', 'peso', 'hta', 'dm2', 'erc', 'icc', 'fa', 'uacr', 'fevi', 'eventoCV', 'dementia',
   'creatinina', 'tfg', 'pas', 'pad', 'hba1c', 'medicamentos', 'fechaUltimoACV', 'fechaUltimoIAM',
+  'sexo', 'tfgMetodo', 'fechaFuncionRenal',
 ];
 
 function wordSet(text) {

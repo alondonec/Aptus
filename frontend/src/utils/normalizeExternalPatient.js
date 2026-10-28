@@ -33,6 +33,13 @@ function parseBooleanValue(raw) {
   return null;
 }
 
+function normalizeSexo(raw) {
+  const v = raw === null || raw === undefined ? '' : normalizeKey(String(raw));
+  if (['f', 'femenino', 'femenina', 'mujer'].includes(v)) return 'F';
+  if (['m', 'masculino', 'hombre', 'varon'].includes(v)) return 'M';
+  return null;
+}
+
 export function normalizeExternalPatient(row) {
   return {
     name: findValue(row, ['nombre', 'name', 'paciente']) ?? 'Sin nombre',
@@ -58,6 +65,7 @@ export function normalizeExternalPatient(row) {
     pas: parseNumber(findValue(row, ['pas', 'presion sistolica', 'presion arterial sistolica'])),
     pad: parseNumber(findValue(row, ['pad', 'presion diastolica', 'presion arterial diastolica'])),
     hba1c: parseNumber(findValue(row, ['hba1c', 'hemoglobina glicosilada'])),
+    sexo: normalizeSexo(findValue(row, ['sexo', 'genero'])),
     medicamentos: findValue(row, ['medicamentos', 'medicacion', 'tratamiento farmacologico']),
     eventoCV: parseBooleanValue(
       findValue(row, ['eventocv', 'evento cv', 'evento cardiovascular', 'evento cardiovascular previo'])
