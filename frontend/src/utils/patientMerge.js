@@ -1,14 +1,40 @@
-// Fusiona dos registros del mismo paciente (mismo número de identificación)
-// tomando, campo por campo, el dato disponible de cualquiera de las dos
-// historias — en vez de sobrescribir a ciegas una con la otra, lo que antes
-// podía borrar información real con valores vacíos de una carga incompleta.
+// Fusiona dos registros del mismo paciente (mismo número de identificación).
+//
+// Regla: el registro que se subió DESPUÉS ("incoming") manda campo por campo, y
+// el anterior solo aporta lo que el nuevo no trae — así una carga incompleta
+// nunca borra datos reales, pero un dato nuevo siempre reemplaza al viejo. El
+// único criterio de "más reciente" que Aptus conoce para estas historias es el
+// orden de carga, salvo para el examen de función renal, que sí trae la fecha
+// del laboratorio (ver pickRenalSource).
 
 const MERGE_FIELDS = [
   'name', 'identification', 'edad', 'fechaNacimiento', 'phone', 'address',
   'imc', 'peso', 'hta', 'dm2', 'erc', 'icc', 'fa', 'uacr', 'fevi', 'eventoCV', 'dementia',
-  'creatinina', 'tfg', 'pas', 'pad', 'hba1c', 'medicamentos', 'fechaUltimoACV', 'fechaUltimoIAM',
-  'sexo', 'tfgMetodo', 'fechaFuncionRenal',
+  'pas', 'pad', 'hba1c', 'medicamentos', 'fechaUltimoACV', 'fechaUltimoIAM', 'sexo',
 ];
+
+// Creatinina, TFG, método y fecha describen UN solo examen: se toman juntos de
+// un mismo registro para no mezclar la creatinina de un laboratorio con la TFG
+// de otro.
+const RENAL_FIELDS = ['creatinina', 'tfg', 'tfgMetodo', 'fechaFuncionRenal'];
+
+const isFilled = (value) => value !== null && value !== undefined && value !== '';
+
+function hasRenalData(patient) {
+  return isFilled(patient.creatinina) || isFilled(patient.tfg);
+}
+
+/** De cuál de los dos registros sale el bloque renal: el que tenga la fecha de
+ * laboratorio más reciente; si no se pueden comparar (falta una fecha o son la
+ * misma), el que se subió después. */
+function pickRenalSource(existing, incoming) {
+  if (!hasRenalData(incoming)) return existing;
+  if (!hasRenalData(existing)) return incoming;
+  const a = existing.fechaFuncionRenal;
+  const b = incoming.fechaFuncionRenal;
+  if (isFilled(a) && isFilled(b) && a !== b) return String(a) > String(b) ? existing : incoming;
+  return incoming;
+}
 
 function wordSet(text) {
   return new Set(
@@ -34,26 +60,20 @@ function isNearDuplicateText(a, b) {
   return shared / (wordsA.size + wordsB.size - shared) >= 0.9;
 }
 
-function countFilledFields(patient) {
-  return MERGE_FIELDS.filter(
-    (f) => patient[f] !== null && patient[f] !== undefined && patient[f] !== ''
-  ).length;
-}
-
 /** Devuelve un paciente fusionado a partir de dos historias del mismo
- * paciente: para cada campo usa el valor de la historia más completa (más
- * campos diligenciados) y solo recurre a la otra cuando esa está vacía.
+ * paciente. `incoming` es la que se subió después; `existing` la ya guardada.
  * Los diagnósticos de ambas se concatenan para no perder información clínica. */
 export function mergeDuplicatePatients(existing, incoming) {
-  const primary = countFilledFields(incoming) >= countFilledFields(existing) ? incoming : existing;
-  const secondary = primary === incoming ? existing : incoming;
+  const primary = incoming;
+  const secondary = existing;
 
   const merged = {};
   for (const field of MERGE_FIELDS) {
-    const primaryValue = primary[field];
-    merged[field] = primaryValue !== null && primaryValue !== undefined && primaryValue !== ''
-      ? primaryValue
-      : secondary[field] ?? null;
+    merged[field] = isFilled(primary[field]) ? primary[field] : secondary[field] ?? null;
+  }
+  const renalSource = pickRenalSource(existing, incoming);
+  for (const field of RENAL_FIELDS) {
+    merged[field] = renalSource[field] ?? null;
   }
 
   const diagnosticsParts = [primary.diagnostics, secondary.diagnostics]

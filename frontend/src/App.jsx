@@ -292,12 +292,17 @@ export default function App() {
       try {
         const candidate = normalizeExtractedPatient(rawPatient, source);
         const saved = await upsertPatient(candidate, patientsRef.current);
-        setPatients((prev) => {
-          const exists = prev.some((p) => p.id === saved.id);
-          const next = exists ? prev.map((p) => (p.id === saved.id ? saved : p)) : [...prev, saved];
-          patientsRef.current = next;
-          return next;
-        });
+        // La referencia se actualiza aquí mismo y no dentro de la función de
+        // setPatients: React puede ejecutar esa función más tarde, y el
+        // siguiente envío de la cola lee la referencia apenas este termina —
+        // si aún estuviera vieja no vería al paciente recién creado y
+        // guardaría a la misma persona dos veces.
+        const current = patientsRef.current;
+        const next = current.some((p) => p.id === saved.id)
+          ? current.map((p) => (p.id === saved.id ? saved : p))
+          : [...current, saved];
+        patientsRef.current = next;
+        setPatients(next);
       } catch (err) {
         setActionError(`No se pudo guardar el paciente: ${err.message}`);
       }
