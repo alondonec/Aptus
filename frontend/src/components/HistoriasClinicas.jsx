@@ -16,6 +16,7 @@ import {
   Check,
   Trash2,
   DollarSign,
+  RefreshCw,
 } from 'lucide-react';
 import { runWithConcurrency, uploadAndExtract } from '../utils/uploadQueue';
 import { getPatientAge } from '../utils/patientAge';
@@ -140,6 +141,46 @@ export default function HistoriasClinicas({
     return maestraIdSet.has(normalizeIdentification(id));
   }
 
+  // Procesa un PDF: lo sube, extrae sus datos y actualiza su fila. Si el servidor
+  // no responde, uploadAndExtract espera y reintenta; mientras tanto la fila
+  // muestra un aviso en vez de quedar como error.
+  async function extractItem(item) {
+    updateItem(item.id, { status: 'uploading', progress: 0, error: null, note: null });
+    const result = await uploadAndExtract(
+      item.file,
+      (progress) => updateItem(item.id, { progress }),
+      ({ attempt, max }) =>
+        updateItem(item.id, { note: `El servidor no responde: esperando y reintentando (${attempt}/${max})…` })
+    );
+    if (result.success) {
+      updateItem(item.id, {
+        status: 'done',
+        progress: 100,
+        patient: result.patient,
+        splitInto: result.splitInto,
+        costUsd: result.costUsd,
+        note: null,
+      });
+    } else {
+      updateItem(item.id, {
+        status: 'error',
+        progress: 100,
+        error: result.error || 'Error desconocido al procesar el PDF',
+        note: null,
+      });
+    }
+  }
+
+  // Los PDFs fallidos solo se pueden reintentar mientras sigan en memoria: si se
+  // recarga la página, el archivo ya no está y hay que volver a cargarlo.
+  function retryableItems(loteItems) {
+    return loteItems.filter((it) => it.status === 'error' && it.file instanceof File);
+  }
+
+  function handleRetryFailed(loteItems) {
+    runWithConcurrency(retryableItems(loteItems), CONCURRENCY_LIMIT, extractItem);
+  }
+
   const processFiles = useCallback(
     (fileList, targetLoteId) => {
       const pdfFiles = Array.from(fileList).filter((f) => f.type === 'application/pdf');
@@ -162,27 +203,7 @@ export default function HistoriasClinicas({
 
       onItemsChange((prev) => [...prev, ...newItems]);
 
-      runWithConcurrency(newItems, CONCURRENCY_LIMIT, async (item) => {
-        updateItem(item.id, { status: 'uploading' });
-        const result = await uploadAndExtract(item.file, (progress) => {
-          updateItem(item.id, { progress });
-        });
-        if (result.success) {
-          updateItem(item.id, {
-            status: 'done',
-            progress: 100,
-            patient: result.patient,
-            splitInto: result.splitInto,
-            costUsd: result.costUsd,
-          });
-        } else {
-          updateItem(item.id, {
-            status: 'error',
-            progress: 100,
-            error: result.error || 'Error desconocido al procesar el PDF',
-          });
-        }
-      });
+      runWithConcurrency(newItems, CONCURRENCY_LIMIT, extractItem);
     },
     [activeLoteId, onCreateLote]
   );
@@ -608,6 +629,26 @@ export default function HistoriasClinicas({
                 {!lote.isLegacy && (
                   <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-100 flex items-center justify-between gap-2">
                     <span className="text-xs text-slate-400">O arrastrá archivos PDF sobre este bloque</span>
+                    {(() => {
+                      const failed = lote.items.filter((it) => it.status === 'error');
+                      if (!failed.length) return null;
+                      const retryable = retryableItems(lote.items);
+                      return (
+                        <button
+                          onClick={() => handleRetryFailed(lote.items)}
+                          disabled={!retryable.length}
+                          title={
+                            retryable.length
+                              ? 'Vuelve a procesar los PDFs que fallaron'
+                              : 'Estos PDFs ya no están en memoria (se recargó la página): vuelve a cargarlos'
+                          }
+                          className="inline-flex items-center gap-1.5 text-xs font-medium text-amber-600 hover:text-amber-700 disabled:text-slate-300 disabled:cursor-not-allowed"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5" /> Reintentar fallidas ({retryable.length}
+                          {failed.length > retryable.length ? ` de ${failed.length}` : ''})
+                        </button>
+                      );
+                    })()}
                     <button
                       onClick={() => addToLoteInputRefs.current[lote.id]?.click()}
                       className="inline-flex items-center gap-1.5 text-xs font-medium text-blue-600 hover:text-blue-700"
@@ -648,6 +689,7 @@ export default function HistoriasClinicas({
                             {item.status === 'error' && (
                               <p className="text-xs text-red-500 mt-1">{item.error}</p>
                             )}
+                            {item.note && <p className="text-xs text-amber-600 mt-1">{item.note}</p>}
                             {item.status === 'done' && item.splitInto && (
                               <p className="text-xs text-slate-400 mt-1">
                                 Documento extenso: dividido en {item.splitInto} partes para procesarlo

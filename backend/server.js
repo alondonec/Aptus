@@ -9,6 +9,7 @@ const cors = require('cors');
 const { PDFDocument } = require('@cantoo/pdf-lib');
 const db = require('./db');
 const { applyTfgFallback } = require('./renalFunction');
+const { createLimiter } = require('./limiter');
 
 // Evita que un error no controlado (ej. una promesa rechazada que nadie
 // esperó) tumbe todo el servidor — desde Node 15 el comportamiento por
@@ -25,10 +26,23 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
 const SHEETS_SYNC_API_KEY = process.env.SHEETS_SYNC_API_KEY;
+// Permite apuntar a otro servidor (por ejemplo uno falso en las pruebas locales,
+// sin gastar créditos); en producción no se define y se usa la API real.
+const ANTHROPIC_BASE_URL = (process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com').replace(/\/+$/, '');
 const ANTHROPIC_VERSION = '2023-06-01';
 const FILES_API_BETA = 'files-api-2025-04-14';
 const MODEL = 'claude-sonnet-4-6';
 const MAX_SPLIT_DEPTH = 3; // hasta 2^3 = 8 partes
+
+// Cuántas historias se extraen al mismo tiempo. Las demás esperan su turno en
+// el servidor en vez de cargarse todas a la vez en memoria; se puede subir
+// desde Render (variable MAX_CONCURRENT_EXTRACTIONS) si la instancia lo aguanta.
+const extractionLimiter = createLimiter(process.env.MAX_CONCURRENT_EXTRACTIONS || 2);
+const SERVER_STARTED_AT = new Date();
+
+function memoryMB() {
+  return Math.round(process.memoryUsage().rss / 1048576);
+}
 
 // Precios oficiales de Sonnet 4.6 (USD por token). Si el modelo o su precio
 // cambian, actualizar acá para que el costo estimado por historia siga
@@ -223,15 +237,22 @@ function translateAnthropicError(message) {
   if (message.includes('credit balance is too low')) {
     return 'La cuenta de Anthropic no tiene saldo suficiente para procesar PDFs. Ve a console.anthropic.com → Plans & Billing para agregar créditos.';
   }
-  if (isContextTooLongError(message)) {
+  if (isPdfTooBigError(message)) {
     return 'Este PDF es demasiado extenso para procesarse, incluso dividiéndolo en partes más pequeñas. Intenta reducir la resolución de los escaneos o separarlo manualmente en documentos más cortos.';
   }
   return message;
 }
 
-function isContextTooLongError(message) {
+// Un PDF "demasiado grande" para una sola solicitud: porque supera el contexto
+// del modelo o porque tiene más páginas de las que acepta la API (600). En ambos
+// casos la solución es la misma: dividirlo en partes más pequeñas.
+function isPdfTooBigError(message) {
   if (!message) return false;
-  return message.includes('prompt is too long') || message.includes('maximum context length');
+  return (
+    message.includes('prompt is too long') ||
+    message.includes('maximum context length') ||
+    /maximum of \d+ PDF pages/i.test(message)
+  );
 }
 
 /** Divide un PDF en `numParts` documentos independientes (por rango de
@@ -330,7 +351,7 @@ async function extractPatientWithSplitting(buffer, filename, depth = 0) {
     const fileId = await uploadFileToAnthropic(buffer, filename);
     return [await extractPatientFromFile(fileId)];
   } catch (err) {
-    if (!isContextTooLongError(err.message) || depth >= MAX_SPLIT_DEPTH) {
+    if (!isPdfTooBigError(err.message) || depth >= MAX_SPLIT_DEPTH) {
       throw err;
     }
     const parts = await splitPdfBuffer(buffer, 2);
@@ -350,7 +371,7 @@ async function uploadFileToAnthropic(buffer, filename) {
   const form = new FormData();
   form.append('file', buffer, { filename, contentType: 'application/pdf' });
 
-  const response = await fetch('https://api.anthropic.com/v1/files', {
+  const response = await fetch(`${ANTHROPIC_BASE_URL}/v1/files`, {
     method: 'POST',
     headers: {
       'x-api-key': ANTHROPIC_API_KEY,
@@ -370,7 +391,7 @@ async function uploadFileToAnthropic(buffer, filename) {
 }
 
 async function extractPatientFromFile(fileId) {
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
+  const response = await fetch(`${ANTHROPIC_BASE_URL}/v1/messages`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -475,7 +496,7 @@ function parseKeywordArray(rawText) {
 }
 
 async function suggestKeywordsForCriterion(criterionName) {
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
+  const response = await fetch(`${ANTHROPIC_BASE_URL}/v1/messages`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -512,7 +533,16 @@ app.post('/extract-pdf', upload.single('file'), async (req, res) => {
       throw new Error('No se recibió ningún archivo PDF');
     }
 
-    const results = await extractPatientWithSplitting(req.file.buffer, req.file.originalname);
+    const queuedAt = Date.now();
+    const before = extractionLimiter.stats();
+    const results = await extractionLimiter.run(() => {
+      const waitedMs = Date.now() - queuedAt;
+      console.log(
+        `[extract] inicia "${req.file.originalname}" (${(req.file.size / 1048576).toFixed(1)} MB) tras esperar ${Math.round(waitedMs / 1000)}s | en cola al llegar: ${before.queued} | rss=${memoryMB()}MB`
+      );
+      return extractPatientWithSplitting(req.file.buffer, req.file.originalname);
+    });
+    console.log(`[extract] listo "${req.file.originalname}" | rss=${memoryMB()}MB | ${JSON.stringify(extractionLimiter.stats())}`);
     const patients = results.map((r) => r.patient);
     const patient = applyTfgFallback(
       applyImcFallback(patients.length > 1 ? mergePatientResults(patients) : patients[0])
@@ -668,7 +698,7 @@ ${text}
 Devuelve ÚNICAMENTE este JSON, sin texto adicional: {"inclusionCriteria": [...], "exclusionCriteria": [...]}`;
 
 async function parseProtocolCriteriaFromText(text) {
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
+  const response = await fetch(`${ANTHROPIC_BASE_URL}/v1/messages`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -757,7 +787,7 @@ app.post('/api/ask', async (req, res) => {
       throw new Error('Se requieren los datos de pacientes');
     }
 
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
+    const response = await fetch(`${ANTHROPIC_BASE_URL}/v1/messages`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1036,15 +1066,36 @@ app.put('/api/historia-items', (req, res) => {
 });
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', hasApiKey: Boolean(ANTHROPIC_API_KEY) });
+  // Además del estado, expone tiempo encendido y memoria: si la instancia se
+  // reinicia (por ejemplo por falta de memoria) se nota porque uptimeSeconds
+  // vuelve a empezar de cero.
+  const mem = process.memoryUsage();
+  res.json({
+    status: 'ok',
+    hasApiKey: Boolean(ANTHROPIC_API_KEY),
+    startedAt: SERVER_STARTED_AT.toISOString(),
+    uptimeSeconds: Math.round(process.uptime()),
+    memory: { rssMB: Math.round(mem.rss / 1048576), heapUsedMB: Math.round(mem.heapUsed / 1048576) },
+    extractions: extractionLimiter.stats(),
+    commit: process.env.RENDER_GIT_COMMIT ? process.env.RENDER_GIT_COMMIT.slice(0, 7) : null,
+  });
 });
 
 // Multer / general error handler
 app.use((err, req, res, next) => {
   if (res.headersSent) return next(err);
-  res.status(400).json({ success: false, error: err.message || 'Error desconocido' });
+  const message =
+    err.code === 'LIMIT_FILE_SIZE'
+      ? 'El PDF supera los 32 MB que acepta la extracción. Comprímelo o divídelo en dos archivos antes de subirlo.'
+      : err.message || 'Error desconocido';
+  res.status(400).json({ success: false, error: message });
 });
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Aptus backend escuchando en http://localhost:${PORT}`);
 });
+// El balanceador de Render mantiene las conexiones abiertas más tiempo que el
+// valor por defecto de Node (5 s): si el servidor las cierra antes, la
+// siguiente petición puede chocar con una conexión ya cerrada y fallar.
+server.keepAliveTimeout = 120 * 1000;
+server.headersTimeout = 125 * 1000;
