@@ -96,6 +96,16 @@ function MetricCard({ icon: Icon, label, value, tone, info }) {
   );
 }
 
+// Techo del eje Y: un número "redondo" (4 divisiones de 1, 1.5, 2, 2.5, 3, 4,
+// 5, 6 u 8 × 10^n) que deja al menos ~15 % de espacio sobre la barra más alta,
+// para que la etiqueta con el valor encima de la barra no quede cortada.
+function niceAxisMax(dataMax) {
+  const step = Math.max(1, (dataMax || 0) * 1.15) / 4;
+  const magnitude = 10 ** Math.floor(Math.log10(step));
+  const nice = [1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10].find((m) => m * magnitude >= step);
+  return Math.ceil(nice * magnitude * 4);
+}
+
 export default function Dashboard({
   patients,
   protocols,
@@ -379,7 +389,7 @@ export default function Dashboard({
           <ResponsiveContainer width={isPrinting ? 430 : '100%'} height={isPrinting ? 205 : 340}>
             <BarChart
               data={conditionCounts}
-              margin={{ top: isPrinting ? 45 : 5, right: 10, left: -10, bottom: isPrinting ? 34 : 90 }}
+              margin={{ top: isPrinting ? 45 : 20, right: 10, left: 0, bottom: isPrinting ? 34 : 90 }}
             >
               <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
               <XAxis
@@ -393,7 +403,8 @@ export default function Dashboard({
               <YAxis
                 allowDecimals={false}
                 tick={{ fontSize: isPrinting ? 10 : 12 }}
-                domain={[0, (max) => max + 40]}
+                domain={[0, niceAxisMax]}
+                tickCount={5}
               />
               <Tooltip />
               <Bar dataKey="pacientes" radius={[4, 4, 0, 0]}>
@@ -439,13 +450,14 @@ export default function Dashboard({
           <InfoTooltip text="Para cada protocolo del alcance seleccionado, cuántos pacientes resultan Aptos o No aptos según sus criterios de inclusión y exclusión. Un mismo paciente puede ser Apto en un protocolo y No apto en otro." />
         </div>
         <ResponsiveContainer width={isPrinting ? 670 : '100%'} height={isPrinting ? 205 : 260}>
-          <BarChart data={protocolStats} margin={{ top: isPrinting ? 45 : 5, right: 20, left: -10, bottom: 5 }}>
+          <BarChart data={protocolStats} margin={{ top: isPrinting ? 45 : 20, right: 20, left: 0, bottom: 5 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
             <XAxis dataKey="protocolo" tick={{ fontSize: isPrinting ? 9 : 12 }} />
             <YAxis
               allowDecimals={false}
               tick={{ fontSize: isPrinting ? 9 : 12 }}
-              domain={[0, (max) => max + 40]}
+              domain={[0, niceAxisMax]}
+                tickCount={5}
             />
             <Tooltip />
             <Legend />
